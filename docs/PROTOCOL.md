@@ -199,17 +199,56 @@ window.__WBCS_SESSION__({ id: "...", messages: [...] });
 
 ## 6. 宿主桥（iframe ↔ 主进程）
 
-扩展 iframe 并非完全隔离，宿主暴露了一套 postMessage RPC：
+扩展 iframe 被宿主当成一个 **Guest 容器**：先建 MessagePort，再在 port 上做 RPC。
+两步缺一不可，第一步没做完界面就是「插件加载失败」。
+
+### 6.0 第一步：guest-ready 握手（漏了它就报「插件加载失败」）
+
+宿主等 iframe 触发 `load`，然后主动推一条 init 消息，并把一个 MessagePort 一并转移进来：
 
 ```js
-// 握手
-{ type: 'wb:handshake:request', requestId, protocolVersion: '1.0' }
-→ { type: 'wb:handshake:response', requestId }
+iframe.contentWindow.postMessage(
+  { type: '__wb_port_init__', readyToken: '<32 位 hex>' },
+  'wb-extension://<extensionId>',
+  [port2]
+);
+```
 
-// 调用
+这个 `port2` 是之后**唯一**的 RPC 通道。guest 必须在 **10 秒**内回一条：
+
+```js
+port2.postMessage({
+  type: 'wb:invoke:request',
+  requestId: 'ready-1',
+  channel: 'wb:boundary:guest-ready',
+  args: [{ readyToken }]          // 必须与 init 里收到的完全一致
+});
+```
+
+没回、回晚了、token 不对，宿主都会判失败：
+
+```
+Guest Ready timed out after 10000ms: cloud-sessions
+→ 界面：「插件加载失败 / 请检查网络后重新加载」
+```
+
+这句话**跟网络没关系**，纯粹是 guest 没在 10s 内报到。
+本项目把这段代码放在 `<head>` 里（`ui/index.html` 顶部那个 IIFE），实测 6ms 完成。
+
+> 老版本笔记里记的 `window.parent.postMessage({ type:'wb:handshake:request' })`
+> 在 1.0.x 桌面端**已经没人监听**了（那条 transport 只用于 webview）。
+> 只发它等于什么都没做：握手超时 + 后续所有 `wb:*` 调用全部失败。
+
+握手之后 port 上的消息格式：
+
+```js
+// guest → host：调用宿主能力
 { type: 'wb:invoke:request', requestId, channel: 'wb:http:get', args: [url, options] }
-→ { type: 'wb:invoke:response', requestId, result }
-            或 { ... , error: { code: 'PERMISSION_DENIED' } }
+// host → guest：结果 / 错误
+{ type: 'wb:invoke:response', requestId, result }
+{ type: 'wb:invoke:response', requestId, error: { message, code } }
+// host → guest：推送事件（wb:conversation:* 等）
+{ type: 'wb:event', event, payload }
 ```
 
 宿主侧 `assertAuthorized` 会校验 subject（来自扩展清单的 `grantedPermissions`）。
@@ -275,6 +314,17 @@ Bridge.invoke('wb:message:fill', [{
 ## 6.3 为什么热更新扩展会「插件加载失败」
 
 这是踩过的最贵的坑，值得单列。
+
+同一句兜底文案（「插件加载失败 / 请检查网络后重新加载」）其实有**两个**完全不同的原因：
+
+| 现象（看客户端日志） | 真因 | 处理 |
+| --- | --- | --- |
+| 面板空白 / 资源取不到 | 运行期替换了扩展目录，宿主仍按启动快照取文件 | 托盘退出后重开 |
+| `Guest Ready timed out after 10000ms: <id>` | guest 没在 10s 内回 `wb:boundary:guest-ready` | 见 [6.0](#60-第一步guest-ready-握手漏了它就报插件加载失败) |
+
+第一种是宿主的快照机制，第二种是扩展自己的代码问题——**两者都会落到同一句"请检查网络"上**，所以先看日志再动手。
+
+下面是第一种的细节。
 
 宿主对 **bundled（内置）** 扩展的处理是「启动时扫一遍，把清单和文件快照缓起来」。证据是页面 URL：
 

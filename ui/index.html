@@ -247,6 +247,132 @@
     .bar .btn-hide { display: none; }
   }
 </style>
+<script>
+/* ------------------------------------------------------------------
+ * 宿主 Guest 通道（必须尽早就位）
+ *
+ * 桌面端把扩展挂在 iframe 里，加载完成后会向 iframe postMessage：
+ *   { type: "__wb_port_init__", readyToken } + MessagePort(port2)
+ * guest 必须在 10s 内通过这个 port 回一条
+ *   { type:"wb:invoke:request", channel:"wb:boundary:guest-ready",
+ *     args:[{ readyToken }] }
+ * 否则宿主判定握手失败，界面就显示「插件加载失败 / 请检查网络后重新加载」
+ * （日志里是 "Guest Ready timed out after 10000ms: <extensionId>"）。
+ * 同时宿主的 wb:* 能力（openExternal / message:fill / http:get ...）
+ * 也只能走这条 MessagePort，window.parent.postMessage 那条老路宿主不再监听。
+ * 所以这段放在 <head> 里、页面前，抢在超时之前完成握手。
+ * ------------------------------------------------------------------ */
+(function () {
+  "use strict";
+  var G = {
+    port: null, token: "", ready: false, via: "", seq: 0,
+    pending: {}, events: {}, lines: []
+  };
+  window.__WBCS_GUEST__ = G;
+
+  function note(s) {
+    try { G.lines.push(s); if (G.lines.length > 30) G.lines.shift(); } catch (e) {}
+  }
+  G.note = note;
+
+  function send(msg) {
+    try { G.port.postMessage(msg); return true; }
+    catch (e) { note("port 发送失败: " + (e && e.message)); return false; }
+  }
+
+  function settle(d) {
+    var p = G.pending[d.requestId];
+    if (!p) return;
+    delete G.pending[d.requestId];
+    if (p.timer) clearTimeout(p.timer);
+    if (d.error) {
+      var err = new Error((d.error && d.error.message) || "宿主调用失败");
+      err.code = d.error && d.error.code;
+      p.reject(err);
+    } else {
+      p.resolve(d.result);
+    }
+  }
+
+  function onPortMessage(ev) {
+    var d = ev && ev.data;
+    if (!d || typeof d !== "object" || typeof d.type !== "string") return;
+    if (d.type === "wb:invoke:response") { settle(d); return; }
+    if (d.type === "wb:event") {
+      var list = G.events[d.event] || [];
+      for (var i = 0; i < list.length; i++) {
+        try { list[i](d.payload); } catch (e) {}
+      }
+      return;
+    }
+    if (d.type === "wb:invoke:request") {
+      send({
+        type: "wb:invoke:response",
+        requestId: d.requestId,
+        error: { message: "本扩展没有对外暴露方法: " + d.channel, code: "WB_GUEST_CHANNEL_NOT_FOUND" }
+      });
+    }
+  }
+
+  G.on = function (name, fn) {
+    (G.events[name] = G.events[name] || []).push(fn);
+  };
+
+  G.invoke = function (channel, args, timeout) {
+    return new Promise(function (resolve, reject) {
+      if (!G.port) { reject(new Error("宿主通道未建立")); return; }
+      var id = "g-" + (++G.seq);
+      var timer = setTimeout(function () {
+        delete G.pending[id];
+        reject(new Error("宿主调用超时：" + channel));
+      }, timeout || 20000);
+      G.pending[id] = { resolve: resolve, reject: reject, timer: timer };
+      if (!send({ type: "wb:invoke:request", requestId: id, channel: channel, args: args || [] })) {
+        clearTimeout(timer); delete G.pending[id];
+        reject(new Error("无法发送宿主调用：" + channel));
+      }
+    });
+  };
+
+  /* 把 ready 当成一次普通 invoke 发出去；宿主把该 channel 注册成 ready gate */
+  function hello(token) {
+    var id = "ready-" + (++G.seq);
+    G.pending[id] = {
+      timer: 0,
+      resolve: function () { G.ready = true; note("guest-ready 已确认"); },
+      reject: function (e) { note("guest-ready 被拒: " + e.message); }
+    };
+    var payload = token ? { readyToken: token } : {};
+    if (!send({ type: "wb:invoke:request", requestId: id, channel: "wb:boundary:guest-ready", args: [payload] })) {
+      delete G.pending[id];
+      note("guest-ready 发送失败");
+    }
+  }
+
+  window.addEventListener("message", function (ev) {
+    var d = ev.data;
+    if (!d || typeof d !== "object") return;
+
+    if (d.type === "__wb_port_init__") {
+      if (G.port) return;
+      var port = ev.ports && ev.ports[0];
+      if (!port) { note("port init 里没有 MessagePort"); return; }
+      G.port = port;
+      G.token = d.readyToken || "";
+      G.via = "port";
+      port.addEventListener("message", onPortMessage);
+      try { port.start(); } catch (e) {}
+      hello(G.token);
+      return;
+    }
+
+    /* 兼容：万一宿主走的是老的 window-message 桥 */
+    if (d.type === "wb:handshake:response" || d.type === "wb:invoke:response") settle(d);
+  }, false);
+
+  note("guest 已就位，等待宿主 port");
+})();
+</script>
 </head>
 <body>
 <header>
@@ -320,7 +446,7 @@
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.0.1";
+  var PAGE_VERSION = "1.0.2";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -431,9 +557,15 @@
   }
 
   /* ================= 宿主桥接 ================= */
-  // 扩展 iframe 可通过 postMessage 调用宿主能力（wb:handshake:request / wb:invoke:request）
+  // 首选 MessagePort 通道（head 里的 __WBCS_GUEST__）；老 postMessage 桥只作兜底。
+  // 桌面端 1.0.x 只在 MessagePort 上监听 wb:*，所以 port 没建起来时
+  // openExternal / message:fill / config:get 都会失败，只能降级。
   var Bridge = (function () {
-    var pending = {}, seq = 0, hs = null, disabled = false, capability = {};
+    var pending = {}, seq = 0, hs = null, disabled = false;
+    function guest() {
+      var g = window.__WBCS_GUEST__;
+      return g && g.port ? g : null;
+    }
     window.addEventListener("message", function (ev) {
       var d = ev.data;
       if (!d || typeof d !== "object" || typeof d.type !== "string") return;
@@ -458,12 +590,14 @@
     }
     function post(msg) { try { window.parent.postMessage(msg, "*"); return true; } catch (e) { return false; } }
     function handshake(timeout) {
+      if (guest()) return Promise.resolve(true);
       if (disabled) return Promise.reject(new Error("宿主桥不可用"));
       if (hs) return hs.promise || Promise.reject(new Error("握手进行中"));
       var id = "hs-" + (++seq);
       var promise = new Promise(function (resolve, reject) {
         hs = { id: id, resolve: resolve, reject: reject, promise: null, timer: 0 };
         hs.timer = setTimeout(function () {
+          // 注意：这里只把「老桥」标记为不可用，MessagePort 到货后仍可正常工作
           if (hs && hs.id === id) { hs = null; disabled = true; reject(new Error("握手超时：宿主未响应")); }
         }, timeout || 3000);
         if (!post({ type: "wb:handshake:request", requestId: id, protocolVersion: "1.0" })) {
@@ -474,6 +608,8 @@
       return promise;
     }
     function invoke(channel, args, timeout) {
+      var g = guest();
+      if (g) return g.invoke(channel, args, timeout);
       return handshake().then(function () {
         return new Promise(function (resolve, reject) {
           var id = "r-" + (++seq);
@@ -488,12 +624,21 @@
         });
       });
     }
-    return { invoke: invoke, handshake: handshake, isDisabled: function () { return disabled; } };
+    return {
+      invoke: invoke,
+      handshake: handshake,
+      isDisabled: function () { return !guest() && disabled; },
+      via: function () {
+        var g = guest();
+        if (!g) return disabled ? "none" : "pending";
+        return g.ready ? "port" : "port(未确认)";
+      }
+    };
   })();
 
   /** 打开外部链接：优先宿主通道（沙箱里 window.open 常被拦），退回 window.open */
   function openExternal(url) {
-    if (!Bridge.isDisabled()) {
+    if (window.parent !== window && !Bridge.isDisabled()) {
       return Bridge.invoke("wb:shell:openExternal", [url], 8000).then(function () {
         log("openExternal", "ok " + url);
       }).catch(function (e) {
@@ -1482,12 +1627,24 @@
   /* ================= 启动 ================= */
   (function boot() {
     routeLinks(document.getElementById("dBody"));
-    var out = [];
-    out.push("snapshot  : " + DATA.generatedAt + " / " + DATA.total + " 条");
-    out.push("url       : " + location.href);
-    out.push("origin    : " + location.origin);
-    out.push("in iframe : " + (window.parent !== window));
-    document.getElementById("diag").textContent = out.join("\n");
+
+    // 诊断信息（宿主通道状态是排查「插件加载失败」的关键）
+    function refreshDiag() {
+      var out = [];
+      var g = window.__WBCS_GUEST__ || null;
+      out.push("snapshot  : " + DATA.generatedAt + " / " + DATA.total + " 条");
+      out.push("url       : " + location.href);
+      out.push("origin    : " + location.origin);
+      out.push("in iframe : " + (window.parent !== window));
+      out.push("宿主通道  : " + (g && g.port
+        ? ("MessagePort" + (g.ready ? "（ready 已确认）" : "（ready 未确认）"))
+        : "未建立（只剩浏览器兜底）"));
+      if (g && g.lines && g.lines.length) out.push("guest     : " + g.lines.join(" | "));
+      var box = document.getElementById("diag");
+      if (box) box.textContent = out.join("\n");
+    }
+    refreshDiag();
+    [300, 1500, 4000, 8000].forEach(function (ms) { setTimeout(refreshDiag, ms); });
 
     // 分片索引（哪些会话有本地正文）
     var s = document.createElement("script");
@@ -1506,19 +1663,36 @@
     s.onerror = function () { log("full/index", "没有本地正文分片（先跑 build）"); };
     document.head.appendChild(s);
 
-    // 宿主桥 / 主题
-    Bridge.handshake(2000).then(function () {
-      log("bridge", "ok");
-      return Bridge.invoke("wb:config:get", ["theme"], 3000).then(function (t) {
-        var v = typeof t === "string" ? t : (t && (t.theme || t.mode));
-        if (v === "dark" || v === "light") {
-          document.documentElement.dataset.theme = v;
-          log("theme", v);
-        }
-      }).catch(function () {});
-    }).catch(function (e) {
-      log("bridge", "unavailable: " + e.message);
-    });
+    // 宿主桥 / 主题：等 MessagePort 建好（宿主在 iframe load 后马上发），
+    // 最多等 4s；等不到就当作纯浏览器环境，直接降级。
+    (function bridgeUp() {
+      var g = window.__WBCS_GUEST__;
+      if (g && !g.port && window.parent !== window) {
+        var tries = 0;
+        var iv = setInterval(function () {
+          if ((g && g.port) || ++tries > 40) { clearInterval(iv); finish(); }
+        }, 100);
+      } else {
+        finish();
+      }
+
+      function finish() {
+        Bridge.handshake(800).then(function () {
+          log("bridge", "ok via " + Bridge.via());
+          refreshDiag();
+          return Bridge.invoke("wb:config:get", ["theme"], 3000).then(function (t) {
+            var v = typeof t === "string" ? t : (t && (t.theme || t.mode));
+            if (v === "dark" || v === "light") {
+              document.documentElement.dataset.theme = v;
+              log("theme", v);
+            }
+          }).catch(function () {});
+        }).catch(function (e) {
+          log("bridge", "unavailable: " + e.message);
+          refreshDiag();
+        });
+      }
+    })();
 
     route();
 

@@ -112,9 +112,14 @@ node bin/wbcs.js serve           # 打开 http://127.0.0.1:8787/
 纯定时任务的会话本来就没有对话记录，页面会明确提示。如果提示「正文还没缓存」，说明这条是抓取之后新建的，重跑 `wbcs fetch`（增量，只抓新增）。
 
 **面板一直提示「插件加载失败，请检查网络后重新加载」**
-不是网络问题。宿主在**启动时**就把内置扩展的清单和文件快照缓存下来了（页面 URL 上的 `?v=<当时版本>&wbs=bundled:<代号>`），
-运行期替换扩展目录后，宿主仍按旧快照去取文件 → 取不到就报这句话。
-**完全退出 WorkBuddy（托盘图标右键退出，只关窗口不够）再打开**即可。所以 `wbcs deploy` 检测到客户端在跑会直接拒绝，别绕过它。
+先看客户端日志/页面底部诊断，两种原因完全不同：
+
+1. 日志里是 `Guest Ready timed out after 10000ms: cloud-sessions`
+   → 扩展自身没在 10 秒内完成 guest 握手（见 `docs/PROTOCOL.md` 6.0）。v1.0.2 已修，升级到这个版本即可。
+2. 日志里是资源 404 / 面板纯空白
+   → 与网络无关。宿主在**启动时**就把内置扩展的清单和文件快照缓存下来了（页面 URL 上的 `?v=<当时版本>&wbs=bundled:<代号>`），
+   运行期替换扩展目录后，宿主仍按旧快照去取文件 → 取不到就报这句话。
+   **完全退出 WorkBuddy（托盘图标右键退出，只关窗口不够）再打开**即可。所以 `wbcs deploy` 检测到客户端在跑会直接拒绝，别绕过它。
 
 **版本号为什么必须三处一致**
 `extension.json` / `distribution.json` / `ui/index.html` 里的 `PAGE_VERSION`。
@@ -147,9 +152,18 @@ src/deploy.js        安装为内置扩展
 src/serve.js         本地预览服务
 src/export.js        Markdown 导出
 ui/index.html        扩展页面（零依赖，纯原生 JS）
+test/handshake.html   假宿主，验证 guest-ready 握手
+test/run-handshake.js 一键跑上面的自检（真实 Chrome）
 extension.json       扩展清单
 distribution.json    分发清单（builtin + iframe）
 docs/PROTOCOL.md     协议与机制逆向笔记
+```
+
+改过 `ui/` 之后想确认握手没坏：
+
+```bash
+npm i playwright-core --no-save
+node test/run-handshake.js      # 输出 PASS 即正常
 ```
 
 ---

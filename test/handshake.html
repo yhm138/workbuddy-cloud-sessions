@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Guest 握手自检（模拟宿主）</title>
+<style>
+  body { font: 13px/1.6 ui-monospace, Consolas, monospace; margin: 0; padding: 12px; background: #f6f6f7; color: #222; }
+  h1 { font: 600 14px/1.4 system-ui; margin: 0 0 8px; }
+  #log { white-space: pre-wrap; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 8px; height: 190px; overflow: auto; }
+  #frameWrap { border: 1px solid #ddd; border-radius: 8px; overflow: hidden; height: 420px; margin-top: 10px; background: #fff; }
+  iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .ok { color: #0a7a35; } .bad { color: #b3261e; } .dim { color: #777; }
+</style>
+</head>
+<body>
+<h1>模拟宿主：__wb_port_init__ → wb:boundary:guest-ready → wb:invoke:request</h1>
+<div id="log"></div>
+<div id="frameWrap"></div>
+
+<script>
+(function () {
+  "use strict";
+  var logBox = document.getElementById("log");
+  var lines = [];
+  function add(text, cls) { lines.push({ text: text, cls: cls || "" }); render(); }
+  function render() {
+    logBox.innerHTML = lines.map(function (x) {
+      return '<div class="' + (x.cls || "") + '">' + x.text + "</div>";
+    }).join("");
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+  window.__HOST_LOG__ = function (text, cls) { add(text, cls); console.log("[host] " + text); };
+
+  var iframe = document.createElement("iframe");
+  // 真宿主用 allow-scripts allow-same-origin，这里保持一致
+  iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads");
+  iframe.src = "../ui/index.html";
+  document.getElementById("frameWrap").appendChild(iframe);
+
+  var token = null;
+  var ready = false;
+  var invoked = 0;
+
+  iframe.addEventListener("load", function () {
+    window.__HOST_LOG__("iframe load，开始发送 __wb_port_init__", "dim");
+    token = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+      .map(function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+
+    var ch = new MessageChannel();
+    ch.port1.onmessage = function (ev) {
+      var d = ev.data;
+      if (!d || typeof d !== "object") return;
+      window.__HOST_LOG__("port ← " + JSON.stringify(d).slice(0, 220), "dim");
+
+      if (d.type === "wb:invoke:request" && d.channel === "wb:boundary:guest-ready") {
+        var got = d.args && d.args[0] && d.args[0].readyToken;
+        if (got === token) {
+          ready = true;
+          window.__HOST_LOG__("✓ guest-ready token 匹配（用了 " + (Date.now() - t0) + "ms）", "ok");
+        } else {
+          window.__HOST_LOG__("✗ guest-ready token 不匹配: " + got, "bad");
+        }
+        ch.port1.postMessage({ type: "wb:invoke:response", requestId: d.requestId });
+        return;
+      }
+      if (d.type === "wb:invoke:request") {
+        invoked++;
+        window.__HOST_LOG__("✓ 收到宿主调用 " + d.channel, "ok");
+        var result;
+        if (d.channel === "wb:config:get") result = "dark";
+        else if (d.channel === "wb:shell:openExternal") result = true;
+        else if (d.channel === "wb:message:fill") result = { filled: true };
+        ch.port1.postMessage({ type: "wb:invoke:response", requestId: d.requestId, result: result });
+        return;
+      }
+    };
+    ch.port1.start();
+
+    var t0 = Date.now();
+    iframe.contentWindow.postMessage({ type: "__wb_port_init__", readyToken: token }, "*", [ch.port2]);
+
+    setTimeout(function () {
+      if (!ready) window.__HOST_LOG__("✗ 10s 内没收到合法的 guest-ready（宿主会显示「插件加载失败」）", "bad");
+    }, 10000);
+  });
+
+  setTimeout(function () {
+    window.__HOST_LOG__("最终结果：ready=" + ready + " invoke=" + invoked, ready ? "ok" : "bad");
+    document.title = (ready ? "READY_OK" : "READY_FAIL");
+  }, 6000);
+})();
+</script>
+</body>
+</html>

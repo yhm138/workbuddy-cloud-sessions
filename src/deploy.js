@@ -41,6 +41,16 @@ function deploy(opts = {}) {
 
   const dest = path.join(targets[0], extId);
 
+  // 先校验源产物，再动目标目录：避免「清空了已装扩展才发现没 build」
+  const mustSrc = ["extension.json", "ui/index.html", "ui/data.js"];
+  const missingSrc = mustSrc.filter((f) => !fs.existsSync(path.join(ROOT, f)));
+  if (missingSrc.length) {
+    throw new Error(
+      `构建产物不完整（缺 ${missingSrc.join(", ")}）。先跑：node bin/wbcs.js build\n` +
+        `已安装的扩展没有改动。`
+    );
+  }
+
   // 安全护栏：只清空 extensions/ 下的同名目录，避免误删
   if (path.basename(targets[0]) !== "extensions") {
     throw new Error(`目标不像扩展根目录（应以 extensions 结尾）：${targets[0]}`);

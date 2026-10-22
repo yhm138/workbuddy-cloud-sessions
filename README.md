@@ -63,7 +63,7 @@ node bin/wbcs.js serve           # 打开 http://127.0.0.1:8787/
 | `wbcs list` | 只读本地 DB，列出有哪些云端会话（不联网） |
 | `wbcs fetch` | 抓正文，支持 `--limit N` / `--only id1,id2` / `--force` / `--idle 4000` |
 | `wbcs build` | 生成 `ui/data.js` + `ui/full/*.js` 分片 + 搜索索引 |
-| `wbcs deploy` | 装进 WorkBuddy 扩展目录（自动探测，可 `--dest`） |
+| `wbcs deploy` | 装进 WorkBuddy 扩展目录（自动探测，可 `--dest`）；**客户端在跑会拒绝**，`--force` 强制热更新 |
 | `wbcs export` | 导出 Markdown 到 `export/`（含 INDEX.md） |
 | `wbcs serve` | 本地静态预览，`--port` 改端口 |
 | `wbcs all` | `fetch` + `build` + `deploy` |
@@ -110,6 +110,16 @@ node bin/wbcs.js serve           # 打开 http://127.0.0.1:8787/
 
 **某条会话点开是空的**
 纯定时任务的会话本来就没有对话记录，页面会明确提示。如果提示「正文还没缓存」，说明这条是抓取之后新建的，重跑 `wbcs fetch`（增量，只抓新增）。
+
+**面板一直提示「插件加载失败，请检查网络后重新加载」**
+不是网络问题。宿主在**启动时**就把内置扩展的清单和文件快照缓存下来了（页面 URL 上的 `?v=<当时版本>&wbs=bundled:<代号>`），
+运行期替换扩展目录后，宿主仍按旧快照去取文件 → 取不到就报这句话。
+**完全退出 WorkBuddy（托盘图标右键退出，只关窗口不够）再打开**即可。所以 `wbcs deploy` 检测到客户端在跑会直接拒绝，别绕过它。
+
+**版本号为什么必须三处一致**
+`extension.json` / `distribution.json` / `ui/index.html` 里的 `PAGE_VERSION`。
+宿主按清单版本给页面打 `?v=`，页面拿它做自检：不一致时面板顶部会显示一条黄色提示，直接告诉你「重启即可」，不用再猜。
+`wbcs build` 会校验三处一致，不一致直接报错。
 
 **装进客户端后菜单里没有**
 `wbcs deploy` 会自动探测安装目录，探测失败时用 `--dest` 手动指定到 `.../app.asar.unpacked/resources/extensions`。装完必须**完全退出**客户端（托盘图标右键退出）再打开。

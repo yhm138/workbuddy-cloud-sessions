@@ -1,9 +1,12 @@
 {
   "id": "cloud-sessions",
   "name": "云端会话",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "把网页版 / 微信小程序 / 定时任务产生的云端历史会话搬进桌面端侧栏：正文、全文搜索、Markdown 导出。",
   "ui": {
+    "onLoadError": {
+      "errorMessage": "面板没加载出来。多半是刚更新过扩展但没重启客户端：请右下角托盘右键退出 WorkBuddy，再重新打开。"
+    },
     "entry": {
       "title": "云端会话",
       "icon": "./icon.svg",

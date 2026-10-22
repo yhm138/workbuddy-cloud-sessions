@@ -51,7 +51,8 @@ function usage() {
       --force                忽略缓存重抓
       --idle 4000            空闲判定（毫秒），网络慢可加大
   wbcs build                 生成 ui/data.js + ui/full/*.js
-  wbcs deploy [--dest DIR]   装进 WorkBuddy 扩展目录（自动探测）
+  wbcs deploy [--dest DIR]   装进 WorkBuddy 扩展目录（自动探测；客户端在跑会拒绝）
+      --force                客户端在跑也照装（装完必须重启，否则面板报加载失败）
   wbcs export [--out DIR]    导出 Markdown
   wbcs serve [--port 8787]   本地预览（127.0.0.1）
   wbcs all [--force]         fetch + build + deploy
@@ -129,7 +130,7 @@ async function main() {
 
     case "deploy": {
       const { deploy } = require("../src/deploy");
-      deploy({ dest: flags.dest });
+      deploy({ dest: flags.dest, force: !!flags.force });
       return;
     }
 
@@ -151,7 +152,8 @@ async function main() {
       const { deploy } = require("../src/deploy");
       await fetchAll({ force: !!flags.force });
       build();
-      deploy({ dest: flags.dest });
+      // --force 同时用于「重抓」和「客户端在跑也部署」，两个语义一致：跳过护栏
+      deploy({ dest: flags.dest, force: !!flags.force });
       return;
     }
 

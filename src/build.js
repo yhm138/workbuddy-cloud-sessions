@@ -14,7 +14,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { UI_DIR, FULL_DIR, SESSIONS_JSON, ORIGIN_LABEL, ORIGIN_ORDER } = require("./config");
+const { UI_DIR, FULL_DIR, SESSIONS_JSON, ORIGIN_LABEL, ORIGIN_ORDER, ROOT } = require("./config");
 const { listCloudSessions } = require("./db");
 const { readStore } = require("./fetch");
 
@@ -60,7 +60,27 @@ function resolveList(storeItems) {
   }));
 }
 
+function assertVersion() {
+  const read = (p) => JSON.parse(fs.readFileSync(path.join(ROOT, p), "utf8")).version;
+  const ext = read("extension.json");
+  const dist = read("distribution.json");
+  if (ext !== dist) {
+    throw new Error(`版本不一致：extension.json=${ext} / distribution.json=${dist}（宿主要求两者相同）`);
+  }
+  const html = fs.readFileSync(path.join(UI_DIR, "index.html"), "utf8");
+  const m = /PAGE_VERSION\s*=\s*"([^"]+)"/.exec(html);
+  if (!m) throw new Error("ui/index.html 里找不到 PAGE_VERSION");
+  if (m[1] !== ext) {
+    throw new Error(
+      `ui/index.html 的 PAGE_VERSION=${m[1]}，清单里是 ${ext}。\n` +
+        "宿主按 extension.json 的版本给页面 URL 打 ?v=，页面拿它做自检，两处必须一致。"
+    );
+  }
+  return ext;
+}
+
 function build() {
+  const version = assertVersion();
   const store = readStore();
   if (!store.items || !store.items.length) {
     throw new Error(`没有抓取结果（${SESSIONS_JSON}）。先跑：node bin/wbcs.js fetch`);

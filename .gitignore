@@ -1,0 +1,18 @@
+# 依赖
+node_modules/
+package-lock.json
+
+# 本地数据（登录态 + 抓取结果 + 导出），都可能含隐私
+.wbcs/
+export/
+
+# 构建产物（由 wbcs build 生成）
+ui/data.js
+ui/full/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log

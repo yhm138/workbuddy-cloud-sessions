@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 语法检查
+        run: |
+          for f in bin/*.js src/*.js; do node --check "$f"; done
+          node -e "
+            const fs=require('fs');
+            const html=fs.readFileSync('ui/index.html','utf8');
+            const m=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+            fs.writeFileSync('/tmp/ui.js', m[m.length-1][1]);
+          "
+          node --check /tmp/ui.js
+      - name: 清单校验
+        run: |
+          node -e "
+            const a=require('./extension.json'), b=require('./distribution.json');
+            if (a.id !== b.extensionId) throw new Error('extensionId 不一致');
+            if (a.version !== b.version) throw new Error('version 不一致');
+            if (a.ui.entry.placement !== 'sidebar') throw new Error('placement 必须是 sidebar');
+            console.log('manifest ok', a.id, a.version);
+          "
+      - name: CLI 自检
+        run: node bin/wbcs.js --help

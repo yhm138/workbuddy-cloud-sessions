@@ -244,6 +244,7 @@
     <h1>云端会话</h1>
     <span class="meta" id="count"></span>
     <span class="spacer"></span>
+    <button id="syncBtn" title="从云端拉最新会话列表（走宿主网络通道）">同步</button>
     <button id="statsBtn" title="统计">统计</button>
     <button id="webBtn" class="btn-hide" title="在浏览器打开网页版">网页版</button>
   </div>
@@ -573,6 +574,114 @@
     });
   }
 
+  /* -------- 在线同步：走宿主网络通道拉最新会话列表 -------- */
+  function httpGet(url, opts) {
+    return Bridge.invoke("wb:http:get", [url, opts || {}], 20000);
+  }
+
+  /** 把 {code,msg,data} / axios {data:{...}} / 裸 body 这几种包装统一拆掉 */
+  function unwrap(res) {
+    var r = res;
+    if (typeof r === "string") {
+      try { r = JSON.parse(r); } catch (e) { return null; }
+    }
+    if (r && typeof r === "object" && r.data !== undefined && (r.code !== undefined || r.msg !== undefined || r.requestId !== undefined)) {
+      r = r.data;
+    }
+    if (r && typeof r === "object" && r.data && r.data.data !== undefined) r = r.data;
+    if (r && typeof r === "object" && r.data && r.data.conversations) r = r.data;
+    return r;
+  }
+
+  function tsOf(c) {
+    var v = c.updatedAt || c.createdAt || c.lastActivityAt;
+    if (typeof v === "number") return v;
+    if (typeof v === "string") {
+      var t = Date.parse(v.replace(" ", "T"));
+      return isNaN(t) ? 0 : t;
+    }
+    return 0;
+  }
+
+  function originOf(c) {
+    if (c.conversationOrigin) return c.conversationOrigin;
+    var envs = (c.manifest && c.manifest.envs) || [];
+    for (var i = 0; i < envs.length; i++) {
+      if (envs[i].key === "CLIENT_INFO_USER_AGENT_EXTENSION" && envs[i].value) return envs[i].value;
+    }
+    return "unknown";
+  }
+
+  function recount() {
+    DATA.total = DATA.items.length;
+    var counts = {};
+    DATA.items.forEach(function (it) { counts[it.origin] = (counts[it.origin] || 0) + 1; });
+    DATA.counts = counts;
+  }
+
+  function syncLive() {
+    var btn = document.getElementById("syncBtn");
+    var old = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "同步中…";
+
+    var collected = [];
+    function page(p) {
+      var url = WEB + "/console/as/conversations/?page_size=20&page=" + p;
+      log("sync/page", p);
+      return httpGet(url).then(function (res) {
+        var d = unwrap(res) || {};
+        var list = d.conversations || [];
+        collected = collected.concat(list);
+        var pgn = d.pagination || {};
+        if (pgn.hasNext && p < (pgn.totalPages || 1) && p < 10) return page(p + 1);
+        return collected;
+      });
+    }
+
+    page(1).then(function (list) {
+      if (!list.length) throw new Error("接口返回 0 条会话");
+      var index = {};
+      DATA.items.forEach(function (it) { index[it.id] = it; });
+      var added = 0;
+      list.forEach(function (c) {
+        var id = String(c.id);
+        var o = originOf(c);
+        if (index[id]) {
+          if (c.name) index[id].title = c.name;
+          return;
+        }
+        var it = {
+          id: id,
+          title: c.name || "(无标题)",
+          origin: o,
+          originLabel: DATA.originLabels[o] || o,
+          ts: tsOf(c),
+          created: tsOf(c),
+          status: c.status || "",
+          n: 0,
+          t: 0,
+          ok: false,
+          live: true
+        };
+        DATA.items.push(it);
+        index[id] = it;
+        added++;
+      });
+      recount();
+      render();
+      log("sync/ok", list.length + " 条，新增 " + added);
+      toast("已同步 " + list.length + " 条会话" + (added ? "，新增 " + added + " 条（正文需重跑 wbcs fetch）" : "，没有新的"));
+      btn.textContent = old;
+      btn.disabled = false;
+    }).catch(function (e) {
+      log("sync/failed", e.message + (e.code ? " [" + e.code + "]" : ""));
+      toast("同步失败：" + e.message + "（宿主可能未放行网络通道）");
+      btn.textContent = old;
+      btn.disabled = false;
+    });
+  }
+
   /* ================= 分片加载 ================= */
   var fullWait = {}, fullFail = {};
   window.__WBCS_SESSION__ = function (data) {
@@ -879,7 +988,9 @@
       name.appendChild(star);
     }
     name.appendChild(document.createTextNode(it.title));
-    if (it.n != null && it.n > 0) name.appendChild(el("span", "badge-n", it.n + " 条"));
+    var idxEntry = INDEX[it.id];
+    if (idxEntry) name.appendChild(el("span", "badge-n", (idxEntry.n || 0) + " 条"));
+    else name.appendChild(el("span", "badge-n", "未缓存"));
     body.appendChild(name);
 
     var sub = el("div", "sub");
@@ -1260,6 +1371,7 @@
   document.getElementById("back").onclick = closeDetail;
   document.getElementById("sBack").onclick = closeDetail;
   document.getElementById("statsBtn").onclick = openStats;
+  document.getElementById("syncBtn").onclick = syncLive;
 
   document.getElementById("dWeb").onclick = function () {
     if (!state.current) return;
@@ -1331,6 +1443,7 @@
     if (typing) return;
 
     if (ev.key === "/") { ev.preventDefault(); document.getElementById("q").focus(); return; }
+    if (ev.key === "r") { syncLive(); return; }
     if (ev.key === "?" ) { openStats(); return; }
     if (state.view !== "list" && state.view !== "search") return;
 

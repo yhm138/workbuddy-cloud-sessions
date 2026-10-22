@@ -226,6 +226,50 @@ window.__WBCS_SESSION__({ id: "...", messages: [...] });
 
 `wb:account:token` 在自定义菜单表面被标为 `host-only`，扩展侧拿不到账号 token。
 
+### 6.1 会话列表的 REST 接口（可用于在线同步）
+
+```http
+GET https://www.workbuddy.cn/console/as/conversations/?page_size=20&page=1
+accept: application/json
+```
+
+响应：
+
+```json
+{
+  "code": 0, "msg": "OK",
+  "data": {
+    "conversations": [
+      { "id": "...", "name": "标题", "status": "completed",
+        "conversationOrigin": "agents",
+        "createdAt": "...", "updatedAt": "...",
+        "manifest": { "envs": [{ "key": "CLIENT_INFO_USER_AGENT_EXTENSION", "value": "agents" }] } }
+    ],
+    "total": 88,
+    "pagination": { "page": 1, "size": 20, "total": 88, "totalPages": 5, "hasNext": true }
+  }
+}
+```
+
+注意：
+
+- 必须有结尾斜杠，`/conversations`（无斜杠）返回 `403 not_authorized`
+- 分页是页码式（`page`），`page_size` 实测上限 20
+- 来源可从 `conversationOrigin` 或 `manifest.envs` 里的 `CLIENT_INFO_USER_AGENT_EXTENSION` 读到
+
+扩展里点「同步」就是循环翻页拿这个列表，合并进本地快照；正文仍需离线抓取，所以新会话会显示「未缓存」。
+
+### 6.2 `wb:message:fill` 的参数
+
+```js
+Bridge.invoke('wb:message:fill', [{
+  content: [{ type: 'text', text: '...' }]   // 或直接传字符串
+  // mode / scene 可选
+}])
+```
+
+语义是**填入输入框，不自动发送**（对应 `wb:message:send` 才会发）。这在桌面端才有意义：浏览器里没有宿主，调用必然失败，本项目会退回到"复制到剪贴板"。
+
 ---
 
 ## 7. 已知限制

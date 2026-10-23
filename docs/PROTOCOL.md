@@ -663,6 +663,46 @@ app-bound 加密，密钥跟可执行文件绑定）。这次用 Chrome 扫码�
 - `zip` 打包用 `-UN=UTF8`，否则中文文件名（`安装.bat`、`使用说明.txt`）到 Windows 资源管理器
   里会变成乱码；同时额外放一个 ASCII 名的 `install.bat`，任何解压工具都能走通。
 
+## 6.8 自动同步，以及「能不能靠打开会话补最新」
+
+**自动同步（v1.8.0）**：宿主是 `keepAlive` 的，iframe 不会重新加载，所以「又点进来了」不能靠
+onload 判断。用三个信号，汇到同一个 60 秒节流的 `autoSync()`：
+
+| 信号 | 说明 |
+| --- | --- |
+| boot 后 1.2s | 首次进入，等桥接就绪 |
+| `IntersectionObserver` on `#main` | 面板被隐藏再显示（0 → 可见） |
+| `visibilitychange` / `window.focus` | 窗口切走再回来 |
+
+自动模式下失败**不弹 toast**（只写诊断，并把节流额度退回去，等下次可见再试），
+成功但没有新会话也**不提示**——否则每次点进来都弹一下，很吵。
+
+**「用会话打开的方式把最新快照拉到本地」为什么走不通**（三条独立证据）：
+
+1. **落盘的本就不是完整历史。** 客户端打开会话时走 ACP 回放，但 daemon 只留下请求片段：
+   实测某会话索引 22 条、面板只渲染 8 轮，且尾部缺失。
+2. **cloud 会话在客户端里显式跳过 runtime。** 主进程里 `ensureRuntime()` 第一行就是
+   `if (this.init.transport === 'cloud') return;` —— 云端会话根本不建本地 runtime/缓存，
+   所以「打开过 = 有本地副本」这个前提对 cloud 不成立。
+3. **深链能触发全量回放，但不是同步手段。** 它会把窗口切到那条会话，一条一次；
+   89 条要点 89 次，用户没法干别的。
+
+**唯一干净的路：给扩展加 service**（6.4 ③）。宿主通道里确实有 `wb:http:post`（不只是 get），
+但 ACP 的历史是从 **SSE 长连接**里回放的，`wb:http:*` 是请求/响应，拿不到流；所以必须有一个
+真正的 Node 进程：用 `https` 建 SSE，用 `wb.invoke('wb:http:get', ...)` 借宿主 cookie 换
+`{link, token}`（等于把 `src/acp.js` 原样搬进客户端）。那样连扫码登录都不需要了。
+
+门槛写在 edge-sync 的清单里，很明确：
+
+```json
+// extension.json
+"service": { "entry": "./server/index.cjs", "process": "fork" }
+// distribution.json
+"processPolicy": { "server": "fork", "renderer": "iframe" }
+```
+
+代价是必须重启客户端才能验证 fork 是否成功，属于下一版的事。
+
 ## 7. 已知限制
 
 - **cloud 会话的正文，面板永远只能看到快照**（详见 6.4 ④）。所谓「拉最新」在面板内不存在，

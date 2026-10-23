@@ -620,11 +620,11 @@
     <h1>云端会话</h1>
     <span class="meta" id="count"></span>
     <span class="spacer"></span>
-    <span class="stamp" id="stamp" title="最近一次从云端拉列表的时间"></span>
+    <span class="stamp" id="stamp" title="最近一次从云端拉列表的时间（进面板会自动同步）"></span>
     <div class="menu-wrap">
       <button id="listMore" class="icon-only" title="更多" aria-haspopup="true" aria-expanded="false">⋯</button>
       <div class="menu" id="listMenu" hidden>
-        <button id="syncBtn" title="从云端拉最新会话列表（走宿主网络通道）"><span id="syncLabel">同步云端列表</span><em>拉最新会话并补正文</em></button>
+        <button id="syncBtn" title="立即从云端拉最新会话列表（进面板时已自动同步，点这里可手动重试）"><span id="syncLabel">同步云端列表</span><em>拉最新会话并补正文</em></button>
         <button id="statsBtn"><span>统计</span><em>来源分布与活跃曲线</em></button>
         <button id="webBtn"><span>网页版</span><em>在系统浏览器打开</em></button>
       </div>
@@ -738,7 +738,7 @@
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.7.0";
+  var PAGE_VERSION = "1.8.0";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -1178,8 +1178,9 @@
     if (snap) ms = DATA.generatedAtMs || 0;
     box.textContent = ms ? (snap ? stampText(ms).replace("同步于", "快照于") : stampText(ms)) : "";
     box.title = ms
-      ? (snap ? "当前显示的是本地快照时间 " : "最近一次从云端拉列表：") + relTime(ms).abs + "（按 R 重新同步）"
-      : "还没有同步过云端列表（按 R 或点「同步」）";
+      ? (snap ? "当前显示的是本地快照时间 " : "最近一次从云端拉列表：") + relTime(ms).abs +
+        "（进面板会自动同步，按 R 或点「同步」可手动刷新）"
+      : "还没有同步过云端列表（进面板会自动同步，也可按 R）";
     box.className = "stamp" + (snap ? " stale" : "");
   }
   function markSynced(ms) {
@@ -1190,10 +1191,14 @@
   }
 
   /* -------- 同步 -------- */
-  function syncLive() {
+  var syncing = false;
+  function syncLive(opts) {
+    var auto = !!(opts && opts.auto);
+    if (syncing) return;
     var btn = document.getElementById("syncBtn");
     var lb = document.getElementById("syncLabel") || btn;
     var old = lb.textContent;
+    syncing = true;
     btn.disabled = true;
     lb.textContent = "同步中…";
 
@@ -1244,22 +1249,38 @@
       recount();
       markSynced(Date.now());
       render();
-      log("sync/ok", list.length + " 条，新增 " + fresh.length);
+      log("sync/ok", list.length + " 条，新增 " + fresh.length + (auto ? "（自动）" : ""));
       lb.textContent = old;
       btn.disabled = false;
+      syncing = false;
 
       if (!fresh.length) {
-        toast("已同步 " + list.length + " 条会话，没有新的");
+        // 自动同步时不打扰：只有确实有新会话才提示
+        if (!auto) toast("已同步 " + list.length + " 条会话，没有新的");
         return;
       }
       toast("已同步，新增 " + fresh.length + " 条，正在拉正文…", 2600);
       pullBodies(fresh);
     }).catch(function (e) {
-      log("sync/failed", e.message + (e.code ? " [" + e.code + "]" : ""));
-      toast("同步失败：" + e.message + "（宿主可能未放行网络通道）");
+      log("sync/failed", e.message + (e.code ? " [" + e.code + "]" : "") + (auto ? "（自动）" : ""));
+      if (!auto) toast("同步失败：" + e.message + "（宿主可能未放行网络通道）");
       lb.textContent = old;
       btn.disabled = false;
+      syncing = false;
+      if (auto) lastAutoSync = 0;   // 通道还没就绪，别把节流额度用掉
     });
+  }
+
+  /* 自动同步：进面板 / 重新可见 / 窗口获得焦点时拉一次列表，60 秒内不重复。
+   * 宿主是 keepAlive 的，iframe 不会重新加载，所以要靠可见性变化判断「又点进来了」。 */
+  var lastAutoSync = 0;
+  function autoSync(reason) {
+    if (syncing) return;
+    if (state.view === "detail" || state.view === "stats") return;
+    if (Date.now() - lastAutoSync < 60000) return;
+    lastAutoSync = Date.now();
+    log("autosync", reason);
+    syncLive({ auto: true });
   }
 
   /* ================= 拉正文（在线，逐条） =================
@@ -2735,6 +2756,26 @@
     })();
 
     route();
+
+    /* 自动同步：打开面板就拉一次列表；之后每次重新可见（60s 节流）再拉。
+     * 宿主 keepAlive，iframe 不会重启，只能靠可见性/焦点变化判断「又点进来了」。 */
+    setTimeout(function () { autoSync("open"); }, 1200);
+    (function autoSyncTriggers() {
+      var mainEl = document.getElementById("main") || document.body;
+      var wasOn = true;
+      if ("IntersectionObserver" in window) {
+        new IntersectionObserver(function (entries) {
+          var e = entries[0];
+          var on = !!(e && e.isIntersecting && e.intersectionRatio > 0);
+          if (on && !wasOn) autoSync("visible");
+          wasOn = on;
+        }, { threshold: [0, 0.01] }).observe(mainEl);
+      }
+      document.addEventListener("visibilitychange", function () {
+        if (!document.hidden) autoSync("tab");
+      });
+      window.addEventListener("focus", function () { autoSync("focus"); });
+    })();
 
     // 版本自检：宿主的扩展清单在启动时快照，热部署后 URL 上的 v= 还是旧版本。
     // 出现不一致说明「文件已经换了、宿主还没重新扫」——重启即可，不是网络问题。

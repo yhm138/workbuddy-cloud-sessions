@@ -58,9 +58,24 @@ async function main() {
   assert.strictEqual(bad.code, "NO_TICKET", "没有票据时要给出 NO_TICKET");
   console.log("✓ 无票据 → " + bad.code + "（" + bad.error + "）");
 
+  /* 真实宿主的调用形状：transport.invoke(method, { callerId }, payload)
+   * → 进程里是 fn(context, payload)。没有 caller 时 callerId 是 undefined，
+   * 判据必须用 `in` 而不是 `!== undefined`，否则会把 context 当业务载荷，
+   * 报「缺少 id」。（v1.9.0 的线上事故就是这个。） */
+  const shaped = await svc.methods.fetchBody({ callerId: undefined }, { id: SESSION_ID, force: true, idleMs: 600, maxMs: 8000 });
+  assert.strictEqual(shaped.ok, true, "宿主形状 (ctx, payload) 必须能取到 id：" + JSON.stringify(shaped));
+  assert.strictEqual(shaped.shard.id, SESSION_ID);
+  console.log("✓ 宿主形状 (ctx, payload) 取到 id");
+
+  const noId = await svc.methods.fetchBody({ callerId: undefined }, { force: true });
+  assert.strictEqual(noId.ok, false);
+  assert.ok(/缺少 id/.test(noId.error) && /callerId/.test(noId.error), "没 id 时错误要带参数形状：" + noId.error);
+  console.log("✓ 缺 id 时带回参数形状");
+
   const st = await svc.methods.status();
   assert.ok(st.cache.includes(SESSION_ID));
-  console.log("✓ status 缓存 " + st.cache.length + " 条");
+  assert.ok(Array.isArray(st.calls) && st.calls.length > 0, "status 要带最近调用形状");
+  console.log("✓ status 缓存 " + st.cache.length + " 条 · calls " + st.calls.length + " 条");
 
   await svc.dispose();
   gw.server.close();

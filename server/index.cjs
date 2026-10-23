@@ -24,7 +24,7 @@ const { loadSession } = require("./acp.cjs");
 const { parseEvents } = require("./parse.cjs");
 
 /** 与 package.json 保持一致（CI 会比对；部署目录里没有 package.json，只能写死） */
-const VERSION = "1.9.0";
+const VERSION = "1.9.1";
 const WEB = "https://www.workbuddy.cn";
 
 /** 正文缓存：重开同一条会话不再重新回放 */
@@ -41,10 +41,16 @@ const MAX_MESSAGES = 6000;
 const cache = new Map(); // id -> { shard, at }
 const inflight = new Map(); // id -> Promise
 const recent = []; // 诊断用环形日志
+const calls = []; // 最近几次方法调用的参数形状（排查参数约定用）
 
 let active = 0;
 const waiting = [];
 let disposed = false;
+
+function record(method, args) {
+  calls.push({ at: Date.now(), method, shape: shapeOf(args) });
+  if (calls.length > 12) calls.shift();
+}
 
 function note(line) {
   const s = `${new Date().toISOString().slice(11, 19)} ${line}`;
@@ -192,12 +198,89 @@ function remember(id, shard) {
   }
 }
 
-function pickParams(a, b) {
-  // 进程内调用是 (context, payload)，LocalRPC 是 (payload, transportContext)
-  const isCtx = (v) => v && typeof v === "object" && (v.callerId !== undefined || v.transport !== undefined || v.endpoint !== undefined);
-  if (b !== undefined && isCtx(a)) return b;
-  if (a !== undefined && b !== undefined && isCtx(b)) return a;
-  return a === undefined ? b : a;
+/* 宿主调用 service 方法的真实形态是 `fn(context, payload)`：
+ *   main   : invokeExtension(method, ...args) → transport.invoke(method, { callerId }, ...args)
+ *   fork   : transport.handle(channel, (...args) => fn(...args)) → args = [{ callerId }, payload]
+ * 关键：没有 caller 时 `callerId` 是 **undefined**，所以判「像不像 context」只能用
+ * `in`，不能用 `!== undefined` —— 用后者会把 `{callerId: undefined}` 当成业务载荷，
+ * 于是 `fetchBody` 收到的是 context、`p.id` 为空，报「缺少 id」。这个坑踩过一次。 */
+const CTX_KEYS = [
+  "callerId",
+  "transport",
+  "endpoint",
+  "invocation",
+  "subject",
+  "accountGeneration",
+  "instanceGeneration",
+  "runtimeGeneration",
+  "connectionEpoch",
+  "signal",
+];
+
+function looksLikeContext(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+  for (const k of CTX_KEYS) if (k in v) return true;
+  return false;
+}
+
+/** 从调用参数里挑出业务载荷：兼容 (payload) / (payload, ctx) / (ctx, payload) */
+function pickParams(...args) {
+  const all = args.filter((v) => v !== undefined);
+  if (!all.length) return undefined;
+  if (all.length === 1) return all[0];
+  const rest = all.filter((v) => !looksLikeContext(v));
+  if (rest.length) return rest[rest.length - 1];
+  return all[all.length - 1];
+}
+
+/** 兜底：参数形状再怎么变，19 位会话 id 总在某个角落 */
+function findSessionId(args) {
+  const seen = new Set();
+  const isId = (v) => typeof v === "string" && /^\d{15,}$/.test(v);
+  function walk(v, depth) {
+    if (depth > 4 || v == null || typeof v !== "object" && typeof v !== "string") return "";
+    if (typeof v === "string") return isId(v) ? v : "";
+    if (seen.has(v)) return "";
+    seen.add(v);
+    for (const k of ["id", "sessionId", "session_id", "conversationId", "conversation_id"]) {
+      if (isId(v[k])) return v[k];
+    }
+    for (const k of Object.keys(v)) {
+      const r = walk(v[k], depth + 1);
+      if (r) return r;
+    }
+    return "";
+  }
+  for (const a of args) {
+    const r = walk(a, 0);
+    if (r) return r;
+  }
+  return "";
+}
+
+/** 诊断用：把参数形状压成一行，出错时带回给面板 */
+function shapeOf(args) {  const brief = (v, d) => {
+    if (v === undefined) return "undefined";
+    if (v === null) return "null";
+    if (typeof v === "string") return "str[" + v.length + "]";
+    if (typeof v !== "object") return typeof v + ":" + String(v);
+    if (Array.isArray(v)) return "arr[" + v.length + "]";
+    if (d > 0) return "obj{" + Object.keys(v).slice(0, 6).join(",") + "}";
+    const parts = Object.keys(v).slice(0, 8).map((k) => k + "=" + brief(v[k], 1));
+    return "{" + parts.join(" ") + "}";
+  };
+  try {
+    return "(" + args.map((a) => brief(a, 0)).join(", ") + ")";
+  } catch (e) {
+    return "(unserializable)";
+  }
+}
+
+/** 先按业务载荷取 id，取不到再从所有参数里兜底捞 19 位数字 */
+function resolveId(p, args) {
+  const direct = p && (p.id || p.sessionId || p.conversationId || p.session_id || p.conversation_id);
+  if (direct) return String(direct);
+  return findSessionId(args);
 }
 
 function activate(wb) {
@@ -206,8 +289,8 @@ function activate(wb) {
 
   const methods = {
     /** 健康检查：面板用它判断 service 是否真的在跑 */
-    ping(payload) {
-      pickParams(payload);
+    ping(...args) {
+      record("ping", args);
       return {
         ok: true,
         version: VERSION,
@@ -221,8 +304,9 @@ function activate(wb) {
       };
     },
 
-    /** 诊断：宿主能力、缓存、最近的失败原因 */
-    status() {
+    /** 诊断：宿主能力、缓存、最近调用与失败原因 */
+    status(...args) {
+      record("status", args);
       return {
         ok: true,
         version: VERSION,
@@ -232,15 +316,17 @@ function activate(wb) {
         inflight: [...inflight.keys()],
         active,
         waiting: waiting.length,
+        calls: calls.slice(-8),
         recent: recent.slice(-20),
       };
     },
 
     /** 只要票据（诊断用，token 打码） */
-    async inspect(payload) {
-      const p = pickParams(payload) || {};
-      const id = String(p.id || "");
-      if (!id) return { ok: false, code: "BAD_ARGS", error: "缺少 id" };
+    async inspect(...args) {
+      record("inspect", args);
+      const p = pickParams(...args) || {};
+      const id = resolveId(p, args);
+      if (!id) return { ok: false, code: "BAD_ARGS", error: "缺少 id " + shapeOf(args) };
       try {
         const t = await fetchTicket(wb, id);
         return {
@@ -259,13 +345,19 @@ function activate(wb) {
      * @param {{id:string, force?:boolean, idleMs?:number, maxMs?:number}} payload
      * @returns {{ok:true, shard:object, cached:boolean, elapsed:number}|{ok:false, code:string, error:string}}
      */
-    async fetchBody(payload) {
-      const p = pickParams(payload) || {};
-      const id = String(p.id || "");
-      if (!id) return { ok: false, code: "BAD_ARGS", error: "缺少 id" };
+    async fetchBody(...args) {
+      record("fetchBody", args);
+      const p = pickParams(...args) || {};
+      const id = resolveId(p, args);
+      if (!id) {
+        note(`fetchBody 没有 id · args=${shapeOf(args)}`);
+        return { ok: false, code: "BAD_ARGS", error: "缺少 id · 参数 " + shapeOf(args) };
+      }
+      // 参数里没捞到业务对象时（只从 id 兜底），force 得单独找
+      const force = p.force || args.some((a) => a && typeof a === "object" && a.force === true);
 
       const hit = cache.get(id);
-      if (!p.force && hit && Date.now() - hit.at < CACHE_TTL) {
+      if (!force && hit && Date.now() - hit.at < CACHE_TTL) {
         cache.delete(id);
         cache.set(id, hit);
         return { ok: true, shard: hit.shard, cached: true, elapsed: 0 };

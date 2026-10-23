@@ -762,7 +762,7 @@
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.9.0";
+  var PAGE_VERSION = "1.9.1";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -820,6 +820,11 @@
     return { txt: txt, abs: abs };
   }
   function label(o) { return DATA.originLabels[o] || o || "未知来源"; }
+  /** toast 宽度有限，长错误只留前半截，完整内容仍进诊断日志 */
+  function briefText(s, n) {
+    s = String(s == null ? "" : s);
+    return s.length > (n || 80) ? s.slice(0, n || 80) + "…" : s;
+  }
   var toastTimer;
   function toast(msg, ms) {
     var t = document.getElementById("toast");
@@ -2918,7 +2923,8 @@
       openDetail(it.id);
       render();
     }).catch(function (e) {
-      toast("拉取失败：" + e.message);
+      log("cloud/pull-fail", e.message);
+      toast("拉取失败：" + briefText(e.message, 90), 2600);
     });
   };
 

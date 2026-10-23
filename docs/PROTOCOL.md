@@ -724,7 +724,8 @@ onload 判断。用三个信号，汇到同一个 60 秒节流的 `autoSync()`�
 ### 服务端契约
 
 - 宿主 fork 子进程（注入 `main/preload/fork-preload.cjs`），然后调模块导出的 `activate(wb)`
-- `activate` 返回 `{ methods, dispose }`；`methods` 是 `name -> async (payload, ctx) => result`
+- `activate` 返回 `{ methods, dispose }`；`methods` 是 `name -> async (context, payload) => result`
+  —— **context 在前**，这个顺序坑过一次，见下面踩坑第 6 条
 - 方法名有约束：不能含 `/`、不能以 `wb:internal:` 开头、长度 ≤ 128
   （`isExtensionLocalRpcMethodName` / `assertPublicExtensionMethod`）；宿主内部按
   `` `${extensionId}/${method}` `` 存白名单
@@ -779,6 +780,15 @@ wb:extensions:$invokeLocalRpcFallback(extensionId, method, payload, fallbackToke
 3. 单条回放：空闲 4s 收尾、硬超时 60s；一次最多回 6000 条消息（IPC 塞太大会断）
 4. 缓存 24 条、TTL 3 分钟，够覆盖「来回点几条」又不至于吃内存
 5. 服务被 idle evict 是常态，不是错误 —— 票据过期 + 上下文失效两条路都要能恢复
+6. **参数顺序：`fn(context, payload)`，而且 context 里的 `callerId` 可能是 `undefined`。**
+   链路是 `invokeExtension(method, ...args)` → `transport.invoke(method, { callerId }, ...args)`
+   → fork 侧 `transport.handle(channel, (...args) => fn(...args))`，所以进程里第一个参数
+   永远是 context。判「像不像 context」**只能**用 `"callerId" in v` / `"invocation" in v`，
+   不能用 `v.callerId !== undefined` —— 没有 caller 时它是 `undefined`，`!==` 判不出来，
+   于是 context 被当成业务载荷，`payload.id` 为空，面板收到「缺少 id」，但同一时刻
+   `ping` / `status` 一切正常（它们不看参数），非常容易误判成「通道没通」。
+   v1.9.0 线上就是这个；v1.9.1 改成「按 key 存在性判 context + 从所有参数里兜底捞 19 位
+   会话 id + 错误信息带上参数形状」
 
 ### 没有客户端时怎么验证
 
@@ -789,8 +799,10 @@ node test/panel-service.js   # Playwright 起假宿主（test/host.html），把
 NO_SERVICE=1 node test/panel-service.js   # 降级路径：必须退回快照模式，不许白屏
 ```
 
-假宿主要照抄宿主的两条约定：`$resolveLocalRpc` 返回 `fallbackToken/fallbackExpiresAt`，
-`$invokeLocalRpcFallback` 收 `(extId, method, payload, token)` 四个参数、就是这个顺序。
+假宿主要照抄宿主的三条约定：`$resolveLocalRpc` 返回 `fallbackToken/fallbackExpiresAt`，
+`$invokeLocalRpcFallback` 收 `(extId, method, payload, token)` 四个参数、就是这个顺序；
+真正调 service 方法时也要按宿主的形状来 —— `fn({ callerId: undefined }, payload)`，
+**不要**偷懒写成 `fn(payload)`，否则测试永远抓不到第 6 条那个坑。
 顺序错了不会告诉你「参数错了」，只会先撞 `INVALID_ARGUMENT`（第 4 个参数本该是票据字符串，
 结果收到的是 payload 对象），或者一路 `PERMISSION_DENIED`。所以假宿主里要显式 `assert`
 一下 token 的形状，让错误尽早暴露在测试里。

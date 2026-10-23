@@ -85,7 +85,7 @@ async function main() {
         fallbackToken: "tok-" + method,
         fallbackExpiresAt: Date.now() + 300000,
         methods: ["ping", "fetchBody", "status", "inspect"],
-        version: "1.9.0",
+        version: "1.9.1",
       };
     }
     if (channel === "wb:extensions:$invokeLocalRpcFallback") {
@@ -95,7 +95,11 @@ async function main() {
       assert.ok(typeof token === "string" && token.startsWith("tok-"), "第 4 个参数必须是票据，实际：" + JSON.stringify(token));
       const fn = svc.methods[method];
       if (!fn) throw new Error("没有方法 " + method);
-      return await fn(payload);
+      /* 照抄真宿主的调用形状：主进程 invokeExtension(method, ...args) 会
+       * transport.invoke(method, { callerId }, ...args)，到 service 进程里就是
+       * fn(context, payload)。callerId 在这里故意留 undefined —— 真宿主没有
+       * caller 时也是这样，v1.9.0 就是被这个形状坑成「缺少 id」。 */
+      return await fn({ callerId: undefined }, payload);
     }
     throw new Error("假宿主没实现通道 " + channel);
   });
@@ -126,7 +130,7 @@ async function main() {
     return;
   }
 
-  assert.ok(/云端直连\s*:\s*service v1\.9\.0/.test(diag), "面板没有认出 service：" + diag);
+  assert.ok(/云端直连\s*:\s*service v1\.9\.1/.test(diag), "面板没有认出 service：" + diag);
 
   // 自动同步 → 出现会话行
   await fr.locator(".row").first().waitFor({ timeout: 30000 });

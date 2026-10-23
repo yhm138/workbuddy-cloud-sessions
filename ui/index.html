@@ -500,21 +500,26 @@
   /* 写完一句话后的确认条：先复制到剪贴板，再决定去哪儿。
      不直接跳走 —— 深链跳过去输入框是空的，用户会以为文字丢了。 */
   .cmp-tip {
-    display: flex; align-items: center; gap: 8px;
-    padding: 7px 10px; border-radius: 10px;
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 8px 10px; border-radius: 10px;
     background: var(--bg-soft); border: 1px solid var(--line-soft);
     font-size: 12.5px; color: var(--fg-mute);
   }
   .cmp-tip[hidden] { display: none; }
-  .cmp-tip .ck { color: #1a7f37; font-weight: 700; }
+  .cmp-tip .ct { line-height: 1.55; }
+  .cmp-tip .ck { color: #1a7f37; font-weight: 700; margin-right: 4px; }
   html[data-theme="dark"] .cmp-tip .ck { color: #58c777; }
-  .cmp-tip .ct { flex: 1 1 auto; min-width: 0; line-height: 1.45; }
+  .cmp-tip .acts { display: flex; gap: 8px; justify-content: flex-end; }
   .cmp-tip button {
     flex: 0 0 auto; height: 26px; padding: 0 10px; border-radius: 13px;
     border: 1px solid var(--line); background: var(--bg); color: var(--fg);
     font-size: 12px; cursor: pointer; white-space: nowrap;
   }
   .cmp-tip button.primary { background: var(--accent, #111); border-color: transparent; color: #fff; }
+  @media (min-width: 560px) {
+    .cmp-tip { flex-direction: row; align-items: center; }
+    .cmp-tip .acts { margin-left: auto; }
+  }
 
   /* 来源 chips 横向滚动时右缘淡出，避免硬裁切 */
   header .chips {
@@ -729,10 +734,11 @@
         </button>
       </div>
       <div class="cmp-tip" id="cmpTip" hidden>
-        <span class="ck">✓</span>
         <span class="ct" id="cmpTipText">已复制</span>
-        <button class="primary" id="cmpGo">打开原会话</button>
-        <button id="cmpBack">再改改</button>
+        <span class="acts">
+          <button id="cmpBack">再改改</button>
+          <button class="primary" id="cmpGo">打开原会话</button>
+        </span>
       </div>
     </div>
   </div>
@@ -3312,12 +3318,13 @@
 
     copyText(text).then(function (ok) {
       showCmpTip(
-        (ok ? "已复制 " + text.length + " 字" : "复制失败，请手动选中复制") +
-          "。打开原会话后按 Ctrl+V 就能粘上，草稿也留着了。",
+        (ok ? "已复制 " : "复制失败，请手动选中复制：") + text.length + " 字" +
+          (ok ? " · 再按一次 Enter 打开原会话，过去 Ctrl+V 粘上（草稿已留）" : ""),
         webFirst(item.origin) ? "网页版打开" : "打开原会话",
         go
       );
-      document.getElementById("cmpGo").focus({ preventScroll: true });
+      /* 焦点留在输入框：用户可能还想接着改字，别把光标抢到按钮上 */
+      input.focus();
     });
   }
   document.getElementById("cSend").onclick = prepareSend;

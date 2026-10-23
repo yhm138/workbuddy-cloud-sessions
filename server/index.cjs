@@ -455,15 +455,23 @@ function activate(wb) {
       const live = partials.get(id);
       if (!live) return { ok: true, id, n: 0, events: 0, live: false };
       const parsed = parseLive(live);
+      let messages = toShardMessages(parsed.messages);
+      /* 超大会话别让 280ms 一次的 peek 把 IPC 塞爆，只回尾部（和 fetchBody 的截断规则一致） */
+      let truncated = false;
+      if (messages.length > MAX_MESSAGES) {
+        messages = messages.slice(-MAX_MESSAGES);
+        truncated = true;
+      }
       return {
         ok: true,
         id,
         live: true,
-        n: parsed.messages.length,
+        n: messages.length,
+        truncated,
         events: live.events.length,
         title: parsed.title || null,
         stats: parsed.stats,
-        messages: toShardMessages(parsed.messages),
+        messages,
         elapsed: Date.now() - live.startedAt,
         idle: Date.now() - live.at,
       };

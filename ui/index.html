@@ -346,6 +346,106 @@
   @media (max-width: 520px) {
     .bar .btn-hide { display: none; }
   }
+  /* ================= 原生对齐层 =================
+   * 目标：让面板里的对话读起来和客户端原生会话页一致 ——
+   * 助手消息是文档流（无气泡），用户消息是右侧浅块，工具调用退成一行，
+   * 底部留一条输入条，顶栏压成一行。 */
+  body[data-view="detail"] > header,
+  body[data-view="stats"] > header,
+  body[data-view="detail"] > footer,
+  body[data-view="stats"] > footer { display: none; }
+  #detailView #dBody { padding-bottom: 12px; }
+
+  #detailView .bar {
+    flex-direction: row; align-items: center; gap: 2px;
+    padding: 6px 6px 6px 2px; min-height: 46px;
+  }
+  #detailView .bar .col { padding-right: 2px; }
+  #detailView .bar .dt { font-size: 13.5px; font-weight: 600; letter-spacing: -.01em; }
+  #detailView .bar .ds { font-size: 11px; color: var(--fg-mute); margin-top: 1px; }
+  #dMore { font-size: 16px; line-height: 1; letter-spacing: .5px; }
+
+  .menu-wrap { position: relative; flex: 0 0 auto; }
+  #listMore {
+    width: 26px; height: 26px; padding: 0; justify-content: center;
+    font-size: 16px; line-height: 1; color: var(--fg-dim);
+    border-color: transparent; background: transparent;
+  }
+  #listMore:hover { color: var(--fg); background: var(--bg-hover); }
+  .menu {
+    position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
+    min-width: 200px; padding: 5px; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, .13);
+  }
+  .menu[hidden] { display: none; }
+  .menu button {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+    width: 100%; height: auto; min-height: 30px; padding: 6px 9px;
+    line-height: 1.3; border: none; background: none;
+    border-radius: 7px; text-align: left; cursor: pointer; color: var(--fg);
+  }
+  .menu button + button { margin-top: 1px; }
+  .menu button:hover { background: var(--bg-hover); }
+  .menu button span { font-size: 12.5px; line-height: 1.35; }
+  .menu button em { font-style: normal; font-size: 10.5px; line-height: 1.35; color: var(--fg-mute); }
+
+  .thread { padding: 14px 14px 10px; }
+  .turn { margin: 0 0 18px; }
+  .turn .who { display: none; }
+  .turn .bubble {
+    background: none; border: none; border-radius: 0; padding: 0;
+    font-size: 14.5px; line-height: 1.78; color: var(--fg);
+  }
+  .turn.user { align-items: flex-end; margin-bottom: 15px; }
+  .turn.user .bubble {
+    background: rgba(0, 0, 0, .045); border-radius: 16px;
+    padding: 8px 13px; max-width: 86%; font-size: 14px; line-height: 1.7;
+  }
+  html[data-theme="dark"] .turn.user .bubble { background: rgba(255, 255, 255, .09); }
+  .turn .bubble .md p:last-child { margin-bottom: 0; }
+
+  details.fold { border: none; border-radius: 8px; margin: 9px 0; background: transparent; }
+  details.fold > summary { padding: 4px 8px; border-radius: 8px; color: var(--fg-mute); }
+  details.fold > summary:hover { background: var(--bg-hover); }
+  details.fold[open] { background: var(--bg-soft); border: 1px solid var(--line-soft); }
+
+  .composer {
+    position: sticky; bottom: 0; z-index: 6;
+    display: flex; gap: 8px; align-items: center;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    background: var(--bg);
+    box-shadow: 0 -10px 18px -14px rgba(0, 0, 0, .22);
+  }
+  .composer[hidden] { display: none; }
+  .composer input {
+    flex: 1 1 auto; min-width: 0; height: 36px; padding: 0 14px;
+    border: 1px solid var(--line); border-radius: 18px;
+    background: var(--bg-soft); font-size: 13.5px; color: var(--fg);
+  }
+  .composer input:focus { outline: none; border-color: rgba(0, 0, 0, .18); background: var(--bg); }
+  .composer button {
+    flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--accent, #111); color: #fff; border: none; cursor: pointer;
+  }
+  .composer button:disabled { opacity: .35; cursor: default; }
+
+  /* 来源 chips 横向滚动时右缘淡出，避免硬裁切 */
+  header .chips {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  }
+  html[data-theme="dark"] .stamp.stale { color: #f0c070; }
+
+  /* 列表：去掉技术噪音（会话 ID），行更紧 */
+  #listView .row { padding: 7px 12px; gap: 8px; }
+  #listView .row .dot { width: 5px; height: 5px; opacity: .4; }
+  #listView .row .sub { gap: 6px; }
+  #listView .row .sub .mono { display: none; }
+  #listView .group-h { padding: 12px 12px 4px; }
+
+  @media (min-width: 760px) { .thread, .composer { max-width: 720px; margin-left: auto; margin-right: auto; } }
 </style>
 <script>
 /* ------------------------------------------------------------------
@@ -481,9 +581,14 @@
     <span class="meta" id="count"></span>
     <span class="spacer"></span>
     <span class="stamp" id="stamp" title="最近一次从云端拉列表的时间"></span>
-    <button id="syncBtn" title="从云端拉最新会话列表（走宿主网络通道）">同步</button>
-    <button id="statsBtn" title="统计">统计</button>
-    <button id="webBtn" class="btn-hide" title="在浏览器打开网页版">网页版</button>
+    <div class="menu-wrap">
+      <button id="listMore" class="icon-only" title="更多" aria-haspopup="true" aria-expanded="false">⋯</button>
+      <div class="menu" id="listMenu" hidden>
+        <button id="syncBtn" title="从云端拉最新会话列表（走宿主网络通道）"><span id="syncLabel">同步云端列表</span><em>拉最新会话并补正文</em></button>
+        <button id="statsBtn"><span>统计</span><em>来源分布与活跃曲线</em></button>
+        <button id="webBtn"><span>网页版</span><em>在系统浏览器打开</em></button>
+      </div>
+    </div>
   </div>
   <div class="search-wrap">
     <span class="ico">⌕</span>
@@ -501,22 +606,22 @@
 
   <div id="detailView">
     <div class="bar">
-      <div class="brow">
-        <button id="back" class="icon" title="返回（Esc）" aria-label="返回"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.5 5.5 8 10 12.5"/></svg></button>
-        <div class="col">
-          <div class="dt" id="dTitle">—</div>
-          <div class="ds" id="dSub">—</div>
-        </div>
+      <button id="back" class="icon" title="返回（Esc）" aria-label="返回"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.5 5.5 8 10 12.5"/></svg></button>
+      <div class="col">
+        <div class="dt" id="dTitle">—</div>
+        <div class="ds" id="dSub">—</div>
       </div>
-      <div class="brow">
-        <button id="dChat" class="primary" title="用深链在客户端打开这条会话本身（同一个 Session），接着在它里面聊">回到会话</button>
-        <button id="dFill" class="ghost" title="把这段历史上下文填进当前输入框（不跳转），用于开新会话">填上下文</button>
-        <span class="spacer"></span>
-        <button id="dFind" class="icon" title="会话内查找（Ctrl+F）">⌕</button>
-        <button id="dFav" class="icon" title="收藏（列表置顶）">☆</button>
-        <button id="dMd" class="icon" title="复制整条会话为 Markdown">MD</button>
-        <button id="dCopy" class="icon btn-hide" title="复制会话 ID">ID</button>
-        <button id="dWeb" class="icon" title="在网页版打开">↗</button>
+      <button id="dFind" class="icon" title="会话内查找（Ctrl+F）">⌕</button>
+      <div class="menu-wrap">
+        <button id="dMore" class="icon" title="更多" aria-haspopup="true" aria-expanded="false">⋯</button>
+        <div class="menu" id="dMenu" hidden>
+          <button id="dChat" data-close><span>回到会话</span><em>在客户端里打开这条会话</em></button>
+          <button id="dFill" data-close><span>填上下文</span><em>把历史塞进当前输入框</em></button>
+          <button id="dWeb" data-close><span>在网页版打开</span></button>
+          <button id="dMd" data-close><span>复制为 Markdown</span></button>
+          <button id="dFav" data-close><span>收藏</span></button>
+          <button id="dCopy" data-close><span>复制会话 ID</span></button>
+        </div>
       </div>
     </div>
     <div class="findbar" id="findbar">
@@ -527,6 +632,12 @@
       <button id="fclose" title="关闭">✕</button>
     </div>
     <div id="dBody"></div>
+    <div class="composer" id="composer" hidden>
+      <input id="cw" placeholder="写一句，回原会话继续…" autocomplete="off" spellcheck="false" />
+      <button id="cSend" title="打开原会话，并把这句话填进输入框（Enter）">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12.5V3.5M4 7l4-3.5L12 7"/></svg>
+      </button>
+    </div>
   </div>
 
   <div id="statsView">
@@ -571,7 +682,7 @@
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.2.0";
+  var PAGE_VERSION = "1.3.0";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -1025,9 +1136,10 @@
   /* -------- 同步 -------- */
   function syncLive() {
     var btn = document.getElementById("syncBtn");
-    var old = btn.textContent;
+    var lb = document.getElementById("syncLabel") || btn;
+    var old = lb.textContent;
     btn.disabled = true;
-    btn.textContent = "同步中…";
+    lb.textContent = "同步中…";
 
     var collected = [];
     function page(p) {
@@ -1077,7 +1189,7 @@
       markSynced(Date.now());
       render();
       log("sync/ok", list.length + " 条，新增 " + fresh.length);
-      btn.textContent = old;
+      lb.textContent = old;
       btn.disabled = false;
 
       if (!fresh.length) {
@@ -1089,7 +1201,7 @@
     }).catch(function (e) {
       log("sync/failed", e.message + (e.code ? " [" + e.code + "]" : ""));
       toast("同步失败：" + e.message + "（宿主可能未放行网络通道）");
-      btn.textContent = old;
+      lb.textContent = old;
       btn.disabled = false;
     });
   }
@@ -2000,8 +2112,9 @@
     var t = relTime(it.ts);
     document.getElementById("dSub").textContent =
       (t ? t.abs + " · " : "") + label(it.origin) + " · " +
-      (it.n ? it.n + " 条" : "正文未缓存") + " · " + it.id;
-    document.getElementById("dFav").textContent = isFav(id) ? "★" : "☆";
+      (it.n ? it.n + " 条" : "正文未缓存");
+    setFavLabel(isFav(id));
+    setComposer(id, false);
     location.hash = "#/s/" + id + (jumpIdx != null ? "/" + jumpIdx : "");
 
     var body = document.getElementById("dBody");
@@ -2025,6 +2138,7 @@
       log("shard", "ok " + (shard.messages || []).length + " msgs");
       body.textContent = "";
       body.appendChild(renderThread(shard, jumpIdx));
+      setComposer(id, (shard.messages || []).length > 0);
       if (findQ && findQ.length >= 1) {
         document.getElementById("findbar").classList.add("on");
         document.getElementById("fq").value = findQ;
@@ -2038,6 +2152,7 @@
     document.getElementById("detailView").classList.remove("on");
     document.getElementById("findbar").classList.remove("on");
     document.getElementById("listView").classList.remove("off");
+    setComposer(null, false);
     state.current = null;
     state.view = "list";
     syncChrome();
@@ -2213,6 +2328,28 @@
     else { state.view = "list"; render(); }
   });
 
+  /* 列表页「更多」菜单（和详情页同一套样式，只是面板不同） */
+  (function bindListMenu() {
+    var b = document.getElementById("listMore");
+    var m = document.getElementById("listMenu");
+    if (!b || !m) return;
+    b.onclick = function (ev) {
+      ev.stopPropagation();
+      m.hidden = !m.hidden;
+      b.setAttribute("aria-expanded", m.hidden ? "false" : "true");
+    };
+    m.addEventListener("click", function (ev) {
+      if (!ev.target.closest("button")) return;
+      setTimeout(function () { m.hidden = true; b.setAttribute("aria-expanded", "false"); }, 0);
+    });
+    document.addEventListener("click", function (ev) {
+      if (m.hidden) return;
+      if (m.contains(ev.target) || ev.target === b) return;
+      m.hidden = true;
+      b.setAttribute("aria-expanded", "false");
+    });
+  })();
+
   document.getElementById("back").onclick = closeDetail;
   document.getElementById("sBack").onclick = closeDetail;
   document.getElementById("statsBtn").onclick = openStats;
@@ -2239,7 +2376,7 @@
   document.getElementById("dFav").onclick = function () {
     if (!state.current) return;
     var added = toggleFav(state.current.id);
-    document.getElementById("dFav").textContent = added ? "★" : "☆";
+    setFavLabel(added);
     toast(added ? "已收藏（列表置顶）" : "已取消收藏");
   };
   document.getElementById("dMd").onclick = function () {
@@ -2255,6 +2392,70 @@
     if (state.current) openSessionInClient(state.current.id);
   };
   document.getElementById("dFill").onclick = continueChat;
+
+  /* -------- 顶栏「更多」菜单 -------- */
+  var dMoreBtn = document.getElementById("dMore");
+  var dMenuEl = document.getElementById("dMenu");
+  function closeMenu() {
+    if (!dMenuEl) return;
+    dMenuEl.hidden = true;
+    dMoreBtn.setAttribute("aria-expanded", "false");
+  }
+  dMoreBtn.onclick = function (ev) {
+    ev.stopPropagation();
+    dMenuEl.hidden = !dMenuEl.hidden;
+    dMoreBtn.setAttribute("aria-expanded", dMenuEl.hidden ? "false" : "true");
+  };
+  dMenuEl.addEventListener("click", function (ev) {
+    if (ev.target.closest("button[data-close]")) setTimeout(closeMenu, 0);
+  });
+  document.addEventListener("click", function (ev) {
+    if (dMenuEl.hidden) return;
+    if (dMenuEl.contains(ev.target) || ev.target === dMoreBtn) return;
+    closeMenu();
+  });
+
+  /* -------- 收藏标签 / 底部输入条 -------- */
+  function setFavLabel(on) {
+    var b = document.getElementById("dFav");
+    if (!b) return;
+    var sp = b.querySelector("span");
+    if (sp) sp.textContent = on ? "取消收藏" : "收藏";
+    else b.textContent = on ? "★" : "☆";
+  }
+
+  function setComposer(id, on) {
+    var c = document.getElementById("composer");
+    if (!c) return;
+    var show = !!(on && id);
+    c.hidden = !show;
+    c.dataset.id = show ? id : "";
+    if (!show) { var i = document.getElementById("cw"); if (i) i.value = ""; }
+  }
+
+  function sendFromComposer() {
+    var c = document.getElementById("composer");
+    var id = c && c.dataset.id;
+    if (!id) return;
+    var input = document.getElementById("cw");
+    var text = (input.value || "").trim();
+    if (!text) { input.focus(); toast("先写一句要接着说的话"); return; }
+    openSessionInClient(id);
+    toast("正在切到原会话…", 1200);
+    setTimeout(function () {
+      if (fillBroken) return copy(text, "已复制这句话，到客户端输入框粘一下");
+      fillMessage(text).then(function () {
+        input.value = "";
+        toast("已打开原会话，这句话已填进输入框");
+      }).catch(function () {
+        copy(text, "已复制这句话，到客户端输入框粘一下");
+      });
+    }, 800);
+  }
+  document.getElementById("cSend").onclick = sendFromComposer;
+  document.getElementById("cw").addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); sendFromComposer(); }
+  });
 
   // 会话内查找
   function openFind() {
@@ -2290,6 +2491,8 @@
     var typing = tag === "input" || tag === "select" || tag === "textarea";
 
     if (ev.key === "Escape" && !typing) {
+      var dm2 = document.getElementById("dMenu");
+      if (dm2 && !dm2.hidden) { closeMenu(); return; }
       var fm = document.getElementById("fillModal");
       if (fm && !fm.hidden) { closeFillHint(); return; }
       if (state.view === "detail" || state.view === "stats") closeDetail();

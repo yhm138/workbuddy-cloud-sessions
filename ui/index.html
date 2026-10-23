@@ -142,6 +142,34 @@
   }
   .toast.show { opacity: .94; transform: translateX(-50%) translateY(0); }
 
+  /* ---------- 续聊引导弹层 ---------- */
+  .modal {
+    position: fixed; inset: 0; z-index: 120; padding: 18px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(15, 23, 42, .42);
+  }
+  .modal[hidden] { display: none; }
+  .modal .card {
+    width: min(440px, 100%); max-height: 100%; overflow: auto;
+    background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 12px; box-shadow: var(--shadow); padding: 18px 18px 14px;
+  }
+  .modal h3 { margin: 0; font-size: 15px; line-height: 1.4; }
+  .modal .sub { margin: 6px 0 0; font-size: 12.5px; color: var(--fg-dim); line-height: 1.6; }
+  .modal ol { margin: 12px 0 10px; padding-left: 20px; font-size: 12.5px; line-height: 1.95; }
+  .modal ol b { color: var(--fg); }
+  .modal .tip {
+    margin: 0; font-size: 12px; color: var(--fg-dim); line-height: 1.6;
+    background: var(--bg-soft); border-radius: 6px; padding: 8px 10px;
+  }
+  .modal .acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+  .modal .acts button {
+    padding: 6px 13px; font-size: 12px; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 6px;
+    background: var(--bg-soft); color: var(--fg);
+  }
+  .modal .acts button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
   /* ---------- 全屏面板 ---------- */
   #detailView, #statsView { display: none; }
   #detailView.on, #statsView.on { display: block; }
@@ -408,7 +436,7 @@
       <span class="spacer"></span>
       <button id="dFind" title="会话内查找（Ctrl+F）">查找</button>
       <button id="dFav" title="收藏（列表置顶）">☆</button>
-      <button id="dChat" title="把这话题的上下文填进 WorkBuddy 输入框，接着聊">接着聊</button>
+      <button id="dChat" title="把这话题的历史上下文填进 WorkBuddy 输入框（内容在面板后面，关掉面板就能看到）">接着聊</button>
       <button id="dCopy" class="btn-hide" title="复制会话 ID">ID</button>
       <button id="dMd" title="复制整条会话为 Markdown">MD</button>
       <button id="dWeb" title="在网页版打开">↗</button>
@@ -440,13 +468,30 @@
 </footer>
 <div class="toast" id="toast"></div>
 
+<div class="modal" id="fillModal" hidden>
+  <div class="card">
+    <h3>上下文已经填进 WorkBuddy 的输入框了</h3>
+    <p class="sub" id="fillSub">—</p>
+    <ol>
+      <li>先离开这个面板：点左上角 <b>←</b>，或按 <b>Esc</b></li>
+      <li>回到对话页，<b>底部输入框</b>里就是这段历史上下文</li>
+      <li>接着输入你的问题，按 <b>Enter</b> 发送</li>
+    </ol>
+    <p class="tip" id="fillTip">如果回去发现输入框是空的（宿主有时会把内容丢进尚未打开的新会话），点下面的「复制上下文」直接粘贴即可。</p>
+    <div class="acts">
+      <button id="fillCopy">复制上下文</button>
+      <button id="fillOk" class="primary">知道了</button>
+    </div>
+  </div>
+</div>
+
 <script src="./data.js"></script>
 <script>
 (function () {
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.0.3";
+  var PAGE_VERSION = "1.0.4";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -730,8 +775,8 @@
       if (fillBroken) return copyContext(ctx);
 
       fillMessage(ctx).then(function () {
-        toast("已填入输入框，直接在客户端接着问就行");
         log("message/fill", "ok " + ctx.length + " 字符");
+        showFillHint(item, ctx);
       }).catch(function (e) {
         // 宿主拒了一次就别再让用户重复踩：按钮直接退化成"复制上下文"
         fillBroken = true;
@@ -748,6 +793,28 @@
 
   function copyContext(ctx) {
     copy(ctx, "已复制 " + ctx.length + " 字上下文，点到聊天框 Ctrl+V 就能接着聊");
+  }
+
+  /**
+   * 「接着聊」成功后的引导。
+   * 宿主只负责把内容塞进输入框，不会关面板、也不会切页面，用户在面板里看不到任何变化，
+   * 所以必须把"去哪看"写清楚，并留一个复制兜底（宿主偶尔会丢到未打开的新会话里）。
+   */
+  var fillCtx = "";
+  function showFillHint(item, ctx) {
+    fillCtx = ctx;
+    var sub = document.getElementById("fillSub");
+    if (sub) {
+      sub.textContent = "「" + (item.title || item.id) + "」的 " + ctx.length +
+        " 字上下文已写入输入框。它就在面板后面，不是没反应。";
+    }
+    var m = document.getElementById("fillModal");
+    if (m) m.hidden = false;
+    toast("已填入输入框 · " + ctx.length + " 字");
+  }
+  function closeFillHint() {
+    var m = document.getElementById("fillModal");
+    if (m) m.hidden = true;
   }
 
   /** Markdown 里的外链：统一交给 openExternal（window.open → 系统浏览器） */
@@ -1570,6 +1637,15 @@
   document.getElementById("dCopy").onclick = function () {
     if (state.current) copy(state.current.id, "已复制会话 ID");
   };
+  document.getElementById("fillOk").onclick = closeFillHint;
+  document.getElementById("fillCopy").onclick = function () {
+    if (!fillCtx) return;
+    copy(fillCtx, "已复制 " + fillCtx.length + " 字上下文，回对话页 Ctrl+V 即可");
+    closeFillHint();
+  };
+  document.getElementById("fillModal").onclick = function (ev) {
+    if (ev.target && ev.target.id === "fillModal") closeFillHint();
+  };
   document.getElementById("dFav").onclick = function () {
     if (!state.current) return;
     var added = toggleFav(state.current.id);
@@ -1621,6 +1697,8 @@
     var typing = tag === "input" || tag === "select" || tag === "textarea";
 
     if (ev.key === "Escape" && !typing) {
+      var fm = document.getElementById("fillModal");
+      if (fm && !fm.hidden) { closeFillHint(); return; }
       if (state.view === "detail" || state.view === "stats") closeDetail();
       return;
     }

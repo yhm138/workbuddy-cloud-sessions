@@ -296,14 +296,13 @@ function checkAuthorizationSimplified(channel, subject) {
 iframe 的 sandbox 带 `allow-popups`，点击有用户手势，所以这条等于「用系统浏览器打开」，
 观察本地日志能看到 `[WindowManager] Denying window.open, opening externally`。
 
-**`wb:message:fill` 为什么调不到**
+**`wb:message:fill` 是另一回事：它其实调得通**
 
-它不在 main 的通道表里（`main/rpc-connection.js` 的 wb: 清单没有 `wb:message:*`），
-只在 renderer 的 custom-menu embed invoker 里（`createEmbedMessageInvoke`），
-是给「自定义菜单」那种 embed 容器用的，扩展 iframe 的请求到不了那一层。
-
-所以「接着聊」只有在宿主真放行时才能直接填输入框；本项目做成：先试一次，
-失败就把上下文复制到剪贴板、按钮文案改成「复制上下文」，不让用户反复踩同一个坑。
+它确实不在 main 的通道表里（`main/rpc-connection.js` 里没有 `wb:message:*`），只存在于 renderer 的
+`createEmbedMessageInvoke`。一开始据此判定「扩展 iframe 到不了那一层」，是**错的**：
+扩展 iframe 和自定义菜单同在**主窗口渲染进程**，请求在渲染进程就被接住了，压根没往 main 转发
+（证据：调用返回成功，`main.log` / `renderer.log` 里都没有 `NO_HANDLER`）。
+细节见 [6.2](#62-wbmessagefill-的参数与真实语义)。
 
 `wb:account:token` 在自定义菜单表面被标为 `host-only`，扩展侧拿不到账号 token。
 
@@ -340,14 +339,16 @@ accept: application/json
 
 扩展里点「同步」就是循环翻页拿这个列表，合并进本地快照；正文仍需离线抓取，所以新会话会显示「未缓存」。
 
-### 6.2 `wb:message:fill` 的参数
+### 6.2 `wb:message:fill` 的参数与真实语义
 
-> 先看清楚：这个通道**扩展 iframe 调不到**（见上一节）。下面只是记下它的真实契约，
-> 万一以后宿主放开，参数按这个传就行。
+> 这里踩过一次「以为不行」。早期版本发现主进程通道表里没有这个通道，就判定扩展 iframe 调不到，
+> 直接降级成复制。实际调用后**返回成功、日志里也没有 `NO_HANDLER`** —— 说明它是在**渲染进程**
+> 被 `createEmbedMessageInvoke` 接住了，根本没转发到 main。所以扩展 iframe 是能用的。
 
 ```js
 Bridge.invoke('wb:message:fill', [{
   content: [{ type: 'text', text: '...' }],  // 也接受裸字符串
+  source: 'cloud-sessions',                  // 可选，只进埋点
   // mode / scene 可选，必须是非空字符串
 }])
 ```
@@ -355,6 +356,21 @@ Bridge.invoke('wb:message:fill', [{
 解析代码（`renderer` 的 `createEmbedMessageInvoke`）要求 `args[0]` 是对象、非数组，
 `content` 是「非空字符串」或「非空 ContentBlock[]」，每个 block 必须有 `type`；
 `text` block 还必须带非空 `text`。不满足会抛 `INVALID_ARGUMENT`。
+
+**它到底做了什么：**
+
+```js
+markClientMenuTransientLeave();                 // 标记"临时离开"，好让面板收起时不被销毁
+Xv.next({ sidebarUrl: '', contentBlocks, source });  // 推给主窗口 composer 的事件流
+```
+
+`Xv` 是主渲染进程里的 composer 事件流，消费方是**主窗口底部的输入框**。由此推出三条重要结论：
+
+1. 它**不会**关掉当前面板、**不会**切页面、**不会**给任何可见反馈 —— 调用方必须自己提示用户。
+2. 内容落在「当前 / 新建会话」的草稿里。实测点击时 `currentConversationId` 从原值变成 `null`，
+   即宿主顺手把你切到了一个新会话草稿；关掉面板回到对话页，输入框里就是那段文本。
+3. 如果那一刻 composer 没挂载（比如主窗口停在非对话页），事件就没人接，**静默丢失且不报错**。
+   所以一定要留「复制到剪贴板」的兜底。
 
 语义是**填入输入框，不自动发送**（`wb:message:send` 才会发）。
 

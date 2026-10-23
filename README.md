@@ -127,9 +127,10 @@ v1.0.3 已修，两处都是通道选错：
 - **在网页打开**：`wb:shell:openExternal` 对扩展 iframe 是硬编码拒绝的（宿主只放行 `subject.type === "window"`）。
   改成在 iframe 里 `window.open` —— 主窗口的 `setWindowOpenHandler` 正好是「deny + shell.openExternal」，
   所以等效于用系统浏览器打开。
-- **接着聊**：`wb:message:fill` 属于「自定义菜单」那条 embed 通道，扩展侧到不了。
-  现在先试一次，失败就自动把上下文复制到剪贴板，按钮文案改成「复制上下文」。
-  想让它真的自动填入，得等宿主放开这个通道。
+- **接着聊**：`wb:message:fill` 其实扩展侧**调得通**（在渲染进程就被接住了，见 PROTOCOL 6.2）。
+  真正的坑是它只往 composer 事件流里推一把：不关面板、不切页面、不给可见反馈，所以看起来「没反应」。
+  v1.0.4 起成功后会弹出引导，直接告诉你「关掉面板、看底部输入框」；万一 composer 没挂载导致静默丢失，
+  弹层里的「复制上下文」就是兜底。
 
 **版本号为什么必须三处一致**
 `extension.json` / `distribution.json` / `ui/index.html` 里的 `PAGE_VERSION`。

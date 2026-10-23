@@ -458,9 +458,54 @@ wb-extension://cloud-sessions/ui/index.html?v=0.1.0&wbs=bundled:382
 
 ---
 
+### 6.4 面板内拉正文：两条通道，以及它们的边界
+
+v1.1.0 起，「同步」之后会顺手把新会话的正文也拉下来。顺序是：
+
+**① 客户端会话服务（首选）**
+
+```js
+window.__wbInvoke('wb:conversations:get', args)   // 扩展 preload 直接暴露，不用走 MessagePort
+```
+
+- `preload/extension-window.js` 里有 `contextBridge.exposeInMainWorld('__wbInvoke', ...)`，
+  它 `ipcRenderer.invoke('wb:invoke', channel, payload)`，比 6.0 的 MessagePort 少一层 boundary。
+  所以扩展 iframe 的通道能力实际上是**两套**：老 postMessage（已废）、MessagePort（guest-ready 那一套）、`__wbInvoke`（最直接）。
+- `wb:conversations:get` 是 daemon RPC。内置扩展 `edge-sync` 的 service 侧就是拿它读会话的
+  （`wb:conversations:list` / `:get` / `:sendPrompt` …），说明这些通道对扩展侧是开放的。
+- **入参形态没有文档**。面板按 `[id]` → `{conversationId}` → `{id}` → 裸 `id` 依次试，谁先回可解析结构就用谁，
+  每次尝试的返回形状都会打进「数据与诊断」（`conv/get :: v0 {"info","requests"}`）。
+- 返回里 `info.transport === 'local'` 才有正文；云端会话可能需要客户端先打开过那条会话。
+
+**② 云端 ACP 直连（兜底，成功率低）**
+
+```
+wb:http:get  /console/as/conversations/<id>/session     → link + token（宿主带 cookie，成功）
+fetch(link)  accept: text/event-stream                  → 需要 CORS
+POST         initialize / session/load                  → 需要预检放行自定义头
+```
+
+实测网关（APISIX 前置）对 `wb-extension://...` 这个 origin **不返回**
+`access-control-allow-origin`，而且 `Acp-Connection-Id` 不在 `access-control-expose-headers` 里，
+浏览器里连读响应头都不行 → 这条路基本会被 CORS 挡死。代码保留着，通了就是白捡。
+
+**③ 真正干净的做法：给扩展加 Node service（尚未启用）**
+
+`extension.json` 支持 `"service": { "entry": "./server/index.cjs", "process": "fork" }`
+（内置扩展 `edge-sync` 就是这么写的），宿主会 fork 一个 Node 进程，
+入口导出 `activate(wb, ctx)` 并返回 `{ methods, dispose }`；UI 侧用
+`wb.extensions.invoke(<extensionId>, <method>, payload)` 调（对应私有通道
+`wb:internal:extension-service-invoke`，自带 accountGeneration / instanceGeneration 校验）。
+
+service 里既有 `https`（SSE 无 CORS 限制），也能 `wb.invoke('wb:http:get', url)` 复用宿主 cookie，
+等于把 `src/acp.js` 那套完整搬进客户端。代价是 manifest 要声明 service、宿主要能 fork 成功，
+属于下一版的事。
+
+---
+
 ## 7. 已知限制
 
-- 正文只能是**抓取时的快照**，没有实时推送；新增会话需要重跑 `wbcs fetch`（增量）
+- 正文默认是**抓取时的快照**；新增会话由面板就地拉取（6.4 的两条通道），两条都不通时才需要 `wbcs fetch` 增量补
 - 单条会话回放靠空闲超时收尾，超大会话（>5000 事件）可能被截断，可调 `--idle` / `--max`
 - 定时任务类会话通常只有任务定义、没有对话记录，属于数据本身如此
 - Windows / macOS / Linux 的扩展目录都做了探测，但只在 Windows 上实测过

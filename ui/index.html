@@ -436,7 +436,8 @@
       <span class="spacer"></span>
       <button id="dFind" title="会话内查找（Ctrl+F）">查找</button>
       <button id="dFav" title="收藏（列表置顶）">☆</button>
-      <button id="dChat" title="把这话题的历史上下文填进 WorkBuddy 输入框（内容在面板后面，关掉面板就能看到）">接着聊</button>
+      <button id="dChat" title="用深链在客户端打开这条会话本身（同一个 Session），接着在它里面聊">回到会话</button>
+      <button id="dFill" title="把这段历史上下文填进当前输入框（不跳转），用于开新会话">填上下文</button>
       <button id="dCopy" class="btn-hide" title="复制会话 ID">ID</button>
       <button id="dMd" title="复制整条会话为 Markdown">MD</button>
       <button id="dWeb" title="在网页版打开">↗</button>
@@ -491,7 +492,7 @@
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.0.4";
+  var PAGE_VERSION = "1.0.5";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -547,12 +548,12 @@
   }
   function label(o) { return DATA.originLabels[o] || o || "未知来源"; }
   var toastTimer;
-  function toast(msg) {
+  function toast(msg, ms) {
     var t = document.getElementById("toast");
     t.textContent = msg;
     t.classList.add("show");
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { t.classList.remove("show"); }, 1800);
+    toastTimer = setTimeout(function () { t.classList.remove("show"); }, ms || 1800);
   }
   function fallbackCopy(text) {
     var ta = document.createElement("textarea");
@@ -720,9 +721,41 @@
   }
 
   /**
-   * 把内容填进 WorkBuddy 当前会话的输入框（不自动发送）。
-   * 通道：wb:message:fill，参数 [{ content: ContentBlock[] | string }]
-   * 这是桌面端独有能力：浏览器里没有宿主，调用必然失败，退回复制。
+   * 直接跳回这条会话本身（同一个 Session），不是搬上下文。
+   * 客户端注册了 workbuddy:// 协议（HKCU\Software\Classes\workbuddy → WorkBuddy.exe "%1"），
+   * 渲染进程的深链路由里 host=chat、path=<会话 id> 就是"打开该会话"，
+   * 证据：tryHandleScheduledTaskArtifactDeepLink 内部拼的就是 `workbuddy://chat/<id>` 再 openConversation。
+   * iframe 里 window.open 会被主窗口 setWindowOpenHandler 接走 → shell.openExternal → 回到本进程。
+   */
+  function openSessionInClient(id) {
+    var url = "workbuddy://chat/" + encodeURIComponent(id);
+    log("deeplink", url);
+    if (window.parent === window || Bridge.isDisabled()) {
+      log("deeplink", "没有宿主，改用网页版");
+      toast("当前不是客户端环境，改用网页版打开");
+      return openExternal(webUrl(id));
+    }
+    try {
+      window.open(url, "_blank", "noopener");
+    } catch (e) {
+      log("deeplink", "failed: " + e.message);
+      toast("深链没发出去，改用网页版");
+      return openExternal(webUrl(id));
+    }
+    // window.open 对自定义协议通常返回 null，不能拿它判断成败，只能看客户端有没有跳过去
+    toast("正在客户端打开这条会话（同一 Session）… 面板没自动关就按 Esc", 3200);
+    // 兜底：3.5s 后页面还可见，多半是没跳过去（这类会话可能只在云端）
+    setTimeout(function () {
+      if (document.visibilityState === "visible") {
+        toast("没跳过去？点右上角 ↗ 用网页版打开同一条会话", 4200);
+      }
+    }, 3500);
+  }
+
+  /**
+   * 把内容填进 WorkBuddy 当前输入框（不自动发送），用于"开一条新会话接着问"。
+   * 通道：wb:message:fill，参数 [{ content: ContentBlock[], source }]
+   * 浏览器里没有宿主，调用必然失败，退回复制。
    */
   function fillMessage(text) {
     return Bridge.invoke(
@@ -781,7 +814,7 @@
         // 宿主拒了一次就别再让用户重复踩：按钮直接退化成"复制上下文"
         fillBroken = true;
         log("message/fill", "failed: " + e.message + (e.code ? " [" + e.code + "]" : ""));
-        var btn = document.getElementById("dChat");
+        var btn = document.getElementById("dFill");
         if (btn) {
           btn.textContent = "复制上下文";
           btn.title = "宿主不允许扩展直接填充，改为复制到剪贴板（粘贴即可）";
@@ -1661,7 +1694,10 @@
     });
   };
 
-  document.getElementById("dChat").onclick = continueChat;
+  document.getElementById("dChat").onclick = function () {
+    if (state.current) openSessionInClient(state.current.id);
+  };
+  document.getElementById("dFill").onclick = continueChat;
 
   // 会话内查找
   function openFind() {

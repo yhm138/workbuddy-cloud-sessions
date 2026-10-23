@@ -374,6 +374,44 @@ Xv.next({ sidebarUrl: '', contentBlocks, source });  // 推给主窗口 composer
 
 语义是**填入输入框，不自动发送**（`wb:message:send` 才会发）。
 
+### 6.2.1 想「回到原会话继续」就得用深链，别搬上下文
+
+`workbuddy://chat/<conversationId>` 就是「打开这条会话」。两处证据：
+
+```js
+// renderer/assets/main-tRyu8TK6.js —— 定时任务产物深链就是这么干的
+let o = `workbuddy://chat/${encodeURIComponent(taskId)}`;
+n.openConversation(o);
+
+// 同一文件 handleDesktopOpenUrl：host 命中"业务 host"时 → y(e) → openConversation
+if (Nt(n.host) || Ot(n) && Pt(n)) { y(e); return true; }
+```
+
+协议已在本机注册（Windows，用户级即可）：
+
+```
+HKCU\Software\Classes\workbuddy
+  (default) = "URL:workbuddy"
+  shell\open\command (default) = "D:\Software\WorkBuddy\WorkBuddy.exe" "%1"
+```
+
+所以扩展 iframe 里 `window.open("workbuddy://chat/<id>")` 的完整链路是：
+
+```
+iframe window.open(自定义协议)
+  → 主窗口 setWindowOpenHandler：非本地文件路径 → shell.openExternal(url)   // 没有协议白名单
+  → ShellExecute → WorkBuddy.exe "<url>"（HKCU 注册项）
+  → 已在运行 → second-instance → DeepLinkRouter.handleUrl → 渲染进程 openConversation
+  → 主窗口跳到那条会话（同一个 Session，历史还在）
+```
+
+两个坑：
+
+- `window.open` 对自定义协议**返回 null**，不能拿返回值判断成败；只能看面板有没有被页面切换带走。
+  所以要点完后延时再提示一句「没跳过去就用网页版」。
+- 深链只对**客户端已有的会话**有效。纯云端的会话（比如只在网页版存在的）跳过去可能停在列表页，
+  这种情况老老实实用 `https://www.workbuddy.cn/app/conversation/<id>` 在浏览器里接着聊。
+
 ---
 
 ## 6.3 为什么热更新扩展会「插件加载失败」

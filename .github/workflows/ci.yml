@@ -36,6 +36,8 @@ jobs:
             if (!b.processPolicy || b.processPolicy.server !== 'fork') throw new Error('processPolicy.server 必须是 fork');
             const svc=require('./server/index.cjs').VERSION;
             if (svc !== p.version) throw new Error('server VERSION 与 package.json 不一致: ' + svc + ' vs ' + p.version);
+            const pv=/var PAGE_VERSION = \"([0-9.]+)\"/.exec(require('fs').readFileSync('ui/index.html','utf8'));
+            if (!pv || pv[1] !== p.version) throw new Error('PAGE_VERSION 与 package.json 不一致: ' + (pv && pv[1]) + ' vs ' + p.version);
             console.log('manifest ok', a.id, a.version);
           "
       - name: service 自测（假网关，不需要登录态）

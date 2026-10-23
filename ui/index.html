@@ -371,6 +371,10 @@
   .snap.cloud { background: rgba(22, 163, 74, .10); }
   .snap.cloud b { color: var(--fg); }
   html[data-theme="dark"] .snap.cloud { background: rgba(74, 222, 128, .12); }
+  /* 回放中的过渡条：浅蓝，和「已完成」的绿色区分开 */
+  .snap.live { background: rgba(37, 99, 235, .09); }
+  html[data-theme="dark"] .snap.live { background: rgba(96, 165, 250, .14); }
+  html[data-theme="dark"] .snap.cloud { background: rgba(74, 222, 128, .12); }
 
   /* 后台任务条：补全正文 / 首次进面板拉最新 */
   .jobbar {
@@ -473,24 +477,44 @@
 
   .composer {
     position: sticky; bottom: 0; z-index: 6;
-    display: flex; gap: 8px; align-items: center;
+    display: flex; flex-direction: column; gap: 6px;
     padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
     background: var(--bg);
     box-shadow: 0 -10px 18px -14px rgba(0, 0, 0, .22);
   }
   .composer[hidden] { display: none; }
+  .composer .cmp-row { display: flex; gap: 8px; align-items: center; }
   .composer input {
     flex: 1 1 auto; min-width: 0; height: 36px; padding: 0 14px;
     border: 1px solid var(--line); border-radius: 18px;
     background: var(--bg-soft); font-size: 13.5px; color: var(--fg);
   }
   .composer input:focus { outline: none; border-color: rgba(0, 0, 0, .18); background: var(--bg); }
-  .composer button {
+  .composer .cmp-row > button {
     flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%; padding: 0;
     display: flex; align-items: center; justify-content: center;
     background: var(--accent, #111); color: #fff; border: none; cursor: pointer;
   }
   .composer button:disabled { opacity: .35; cursor: default; }
+
+  /* 写完一句话后的确认条：先复制到剪贴板，再决定去哪儿。
+     不直接跳走 —— 深链跳过去输入框是空的，用户会以为文字丢了。 */
+  .cmp-tip {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px; border-radius: 10px;
+    background: var(--bg-soft); border: 1px solid var(--line-soft);
+    font-size: 12.5px; color: var(--fg-mute);
+  }
+  .cmp-tip[hidden] { display: none; }
+  .cmp-tip .ck { color: #1a7f37; font-weight: 700; }
+  html[data-theme="dark"] .cmp-tip .ck { color: #58c777; }
+  .cmp-tip .ct { flex: 1 1 auto; min-width: 0; line-height: 1.45; }
+  .cmp-tip button {
+    flex: 0 0 auto; height: 26px; padding: 0 10px; border-radius: 13px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+    font-size: 12px; cursor: pointer; white-space: nowrap;
+  }
+  .cmp-tip button.primary { background: var(--accent, #111); border-color: transparent; color: #fff; }
 
   /* 来源 chips 横向滚动时右缘淡出，避免硬裁切 */
   header .chips {
@@ -681,6 +705,7 @@
         <div class="menu" id="dMenu" hidden>
           <button id="dPull" data-close><span>从云端拉最新正文</span><em>直连云端 · 不用扫码</em></button>
           <button id="dFill" data-close><span>填上下文</span><em>把历史塞进当前输入框</em></button>
+          <button id="dChatForce" data-close hidden><span>回客户端（可能为空）</span><em>小程序 / App 来源在客户端里没有正文</em></button>
           <button id="dWeb" data-close><span>在网页版打开</span></button>
           <button id="dMd" data-close><span>复制为 Markdown</span></button>
           <button id="dFav" data-close><span>收藏</span></button>
@@ -697,10 +722,18 @@
     </div>
     <div id="dBody"></div>
     <div class="composer" id="composer" hidden>
-      <input id="cw" placeholder="写一句，回原会话继续…" autocomplete="off" spellcheck="false" />
-      <button id="cSend" title="打开原会话，并把这句话填进输入框（Enter）">
-        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12.5V3.5M4 7l4-3.5L12 7"/></svg>
-      </button>
+      <div class="cmp-row">
+        <input id="cw" placeholder="写一句，带回原会话接着问…" autocomplete="off" spellcheck="false" />
+        <button id="cSend" title="复制这句并打开原会话（Enter）">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12.5V3.5M4 7l4-3.5L12 7"/></svg>
+        </button>
+      </div>
+      <div class="cmp-tip" id="cmpTip" hidden>
+        <span class="ck">✓</span>
+        <span class="ct" id="cmpTipText">已复制</span>
+        <button class="primary" id="cmpGo">打开原会话</button>
+        <button id="cmpBack">再改改</button>
+      </div>
     </div>
   </div>
 
@@ -739,6 +772,21 @@
   </div>
 </div>
 
+<div class="modal" id="pickModal" hidden>
+  <div class="card" role="dialog" aria-modal="true" aria-labelledby="pickTitle">
+    <div class="hd">
+      <h3 id="pickTitle">—</h3>
+      <button class="x" id="pickX" title="关闭（Esc）" aria-label="关闭"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+    </div>
+    <p class="sub" id="pickSub">—</p>
+    <p class="tip" id="pickTip">—</p>
+    <div class="acts">
+      <button id="pickA">—</button>
+      <button id="pickB" class="primary">—</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="fillModal" hidden>
   <div class="card">
     <h3>上下文已经填进 WorkBuddy 的输入框了</h3>
@@ -762,7 +810,7 @@
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.9.1";
+  var PAGE_VERSION = "1.10.0";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -840,11 +888,24 @@
     try { document.execCommand("copy"); } catch (e) {}
     document.body.removeChild(ta);
   }
+  /** 静默复制：返回 Promise<boolean>，调用方自己决定怎么提示 */
+  function copyText(text) {
+    return new Promise(function (resolve) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { resolve(true); }, function () {
+          fallbackCopy(text);
+          resolve(true);
+        });
+      } else {
+        fallbackCopy(text);
+        resolve(true);
+      }
+    });
+  }
+
   function copy(text, okMsg) {
     function done() { toast(okMsg || "已复制"); }
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
-    } else { fallbackCopy(text); done(); }
+    copyText(text).then(done, done);
   }
   function download(name, text, mime) {
     try {
@@ -989,6 +1050,7 @@
     var state = "unknown";       // unknown | ok | off
     var info = null;             // ping 结果
     var lastErr = "";
+    var lastFetch = null;        // 最近一次回放：耗时与命中方式（诊断区显示）
     var style = null;            // "port" | "ipc"
     try { style = localStorage.getItem("wbcs.sbStyle") || null; } catch (e) {}
 
@@ -1089,6 +1151,16 @@
       style: function () { return style || "-"; },
       probe: probe,
       status: function () { return call("status", {}, 20000); },
+      /** 预热连接：进面板就调一次，第一次点会话能少几百毫秒 */
+      warm: function () {
+        if (state === "off") return Promise.resolve(false);
+        return call("warm", {}, 6000).catch(function () { return false; });
+      },
+      /** 回放进度：边等边画，n 不涨就不用重绘 */
+      peek: function (id) {
+        if (state === "off") return Promise.resolve(null);
+        return call("peek", { id: id }, 15000).catch(function () { return null; });
+      },
       fetchBody: function (id, opts) {
         if (state === "off") return Promise.reject(new Error("service 不可用"));
         return call("fetchBody", Object.assign({ id: id }, opts || {}), 180000).then(function (r) {
@@ -1099,12 +1171,14 @@
             throw e;
           }
           state = "ok";
+          lastFetch = { id: id, at: Date.now(), elapsed: r.elapsed || 0, cached: r.cached || false, shard: r.shard };
           return r;
         }).catch(function (e) {
           if (/PERMISSION|STALE|NO_GRANT|不可用/.test(String(e.message))) state = "off";
           throw e;
         });
-      }
+      },
+      last: function () { return lastFetch; }
     };
   })();
 
@@ -1140,7 +1214,24 @@
    * 证据：tryHandleScheduledTaskArtifactDeepLink 内部拼的就是 `workbuddy://chat/<id>` 再 openConversation。
    * iframe 里 window.open 会被主窗口 setWindowOpenHandler 接走 → shell.openExternal → 回到本进程。
    */
-  function openSessionInClient(id) {
+  function openSessionInClient(id, opts) {
+    opts = opts || {};
+    var item = DATA.items.find(function (x) { return x.id === id; });
+    var origin = item && item.origin;
+    /* 小程序 / App 来源是「深链陷阱」：客户端里那条记录是空的，跳过去只会看到
+     * 「暂无对话记录」。先问清楚，别让人以为是我们把正文弄丢了。 */
+    if (!opts.force && webFirst(origin)) {
+      pickModal(
+        "这条会话客户端里是空的",
+        "它来自" + label(origin) + "，客户端只认桌面端自己产生的对话记录，打开会显示「暂无对话记录」。",
+        "面板里已经拉到云端正文了；要在原会话里接着问，用网页版。",
+        "仍然回客户端",
+        function () { openSessionInClient(id, { force: true }); },
+        "网页版打开",
+        function () { openExternal(WEB + "/app/conversation/" + id); }
+      );
+      return;
+    }
     var url = "workbuddy://chat/" + encodeURIComponent(id);
     log("deeplink", url);
     if (window.parent === window || Bridge.isDisabled()) {
@@ -1219,6 +1310,10 @@
       if (!ctx) return toast("这条会话没有可用的对话内容");
 
       if (fillBroken) return copyContext(ctx);
+
+      /* 先复制再 fill：宿主那条 fill 有时会静默丢进「新建会话草稿」，
+       * 剪贴板里留一份，至少不会白跑一趟。 */
+      copyText(ctx);
 
       fillMessage(ctx).then(function () {
         log("message/fill", "ok " + ctx.length + " 字符");
@@ -1528,12 +1623,36 @@
         return !(it.n > 0) && !prefetched[it.id] && !(PULL_FAIL[it.id] > cut);
       })
       .sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); })
-      .slice(0, 3);
+      .slice(0, 5);
     if (!cand.length) return;
     cand.forEach(function (it) { prefetched[it.id] = 1; });
     startFill(cand, { label: "预取最近会话" }).then(function () {
       cand.forEach(function (it) { if (!(it.n > 0)) markPullFail(it.id); });
     });
+  }
+
+  /* 鼠标停在某一行上就开始拉那条 —— 真点进去时通常已经在缓存里，
+   * 体感从「等 1.5 秒」变成「直接有」。最多 2 条并行，避免扫一遍列表把网关打满。 */
+  var hoverTimer = null;
+  var hoverBusy = 0;
+  function prefetchOnHover(it) {
+    if (SB.state() !== "ok" || fillJob || hoverBusy >= 2) return;
+    var cut = Date.now() - FAIL_TTL;
+    if (it.n > 0 || SESSIONS[it.id] || prefetched[it.id] || PULL_FAIL[it.id] > cut) return;
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(function () {
+      hoverBusy++;
+      prefetched[it.id] = 1;
+      SB.fetchBody(it.id, it.ts ? { ts: it.ts } : null).then(function (r) {
+        var shard = r.shard || r;
+        shard.id = it.id;
+        acceptShard(it, shard, "cloud");
+        if (state.view === "list" || state.view === "search") render();
+      }).catch(function (e) {
+        markPullFail(it.id);
+        log("prefetch/fail", it.id + " " + e.message);
+      }).then(function () { hoverBusy--; });
+    }, 150);
   }
 
   /* 自动同步：进面板 / 重新可见 / 窗口获得焦点时拉一次列表，60 秒内不重复。
@@ -1768,6 +1887,9 @@
     it.t = (shard.stats && shard.stats.tool) || 0;
     it.cloud = source === "cloud";
     if (source === "cloud") it.liveAt = shard.fetchedAt || Date.now();
+    /* 记住这份正文是哪来的：预取也是走云端，等会儿点进详情别又当成「本机快照」，
+     * 否则会误弹「快照可能不是最新」的提醒（而且内容明明是刚拉的）。 */
+    shard.src = source || "local";
     SESSIONS[it.id] = shard;
     INDEX[it.id] = { n: it.n, ok: true };
     if (shard.title && shard.title !== it.title) it.title = shard.title;
@@ -2284,6 +2406,16 @@
     return d;
   }
 
+  /** 回放中的提示条：告诉用户「已经在看了，后面还在继续补」 */
+  function liveNote(shard) {
+    var d = el("div", "snap live");
+    d.appendChild(el("b", null, "云端回放中"));
+    var got = (shard.messages || []).length;
+    var txt = " · 已到 " + got + " 条" + (shard.events ? "（" + shard.events + " 个事件）" : "") + "，还在往后补…";
+    d.appendChild(document.createTextNode(txt));
+    return d;
+  }
+
   function stateBox(title, note, actions) {
     var box = el("div", "state");
     box.appendChild(el("div", "big", title));
@@ -2389,6 +2521,8 @@
     row.dataset.id = it.id;
     row.title = "点击查看正文";
     row.onclick = function () { openDetail(it.id); };
+    /* 鼠标扫过就先去拉：等真点进去，多半已经在缓存里了 */
+    row.onmouseenter = function () { prefetchOnHover(it); };
 
     var dot = el("span", "dot");
     dot.dataset.o = ORDER.indexOf(it.origin) >= 0 ? it.origin : "other";
@@ -2599,6 +2733,15 @@
       (it.n ? it.n + " 条" : "正文未缓存");
     setFavLabel(isFav(id));
     setComposer(id, false);
+
+    /* 主按钮跟着来源走：小程序/App 来源指向网页版，别把人送进客户端的空壳 */
+    var webOnly = webFirst(it.origin);
+    var chatBtn = document.getElementById("dChat");
+    chatBtn.textContent = webOnly ? "网页版打开" : "回到会话";
+    chatBtn.title = webOnly
+      ? "这条来自" + label(it.origin) + "，客户端里没有正文；网页版能看到完整历史并接着聊"
+      : "在客户端里打开这条会话本身（同一个 Session），接着在它里面聊";
+    document.getElementById("dChatForce").hidden = !webOnly;
     location.hash = "#/s/" + id + (jumpIdx != null ? "/" + jumpIdx : "");
 
     var body = document.getElementById("dBody");
@@ -2612,20 +2755,32 @@
      * 先秒开快照，再让云端在后面补 —— 比一直转圈更接近「打开就是最新」。 */
     function paint(shard, src) {
       var got = (shard.messages || []).length;
-      body.textContent = "";
       if (!got) {
+        body.textContent = "";
         body.appendChild(uncachedCard(it, id));
         setComposer(id, false);
         return;
       }
-      body.appendChild(src === "cloud" ? cloudNote(shard) : snapNote(it, id, got));
-      body.appendChild(renderThread(shard, jumpIdx));
-      if (src !== "cloud") maybeWarnSnapshot(it, id, got);
+      /* 回放中会反复重绘，滚动位置得自己接住，否则每 300ms 跳回顶部 */
+      var mainEl = document.getElementById("main");
+      var sc = mainEl.scrollTop;
+      var atBottom = sc + mainEl.clientHeight >= mainEl.scrollHeight - 48;
+      var frag = document.createDocumentFragment();
+      frag.appendChild(
+        src === "cloud" ? cloudNote(shard)
+          : src === "live" ? liveNote(shard)
+          : snapNote(it, id, got)
+      );
+      frag.appendChild(renderThread(shard, src === "live" ? null : jumpIdx));
+      body.textContent = "";
+      body.appendChild(frag);
+      if (src === "snap") maybeWarnSnapshot(it, id, got);
       setComposer(id, true);
       var t = relTime(it.ts);
       document.getElementById("dSub").textContent =
         (t ? t.abs + " · " : "") + label(it.origin) + " · " + got + " 条" +
-        (src === "cloud" ? " · 云端最新" : "");
+        (src === "cloud" ? " · 云端最新" : src === "live" ? " · 云端回放中" : "");
+      mainEl.scrollTop = atBottom ? mainEl.scrollHeight : sc;
       if (findQ && findQ.length >= 1) {
         document.getElementById("findbar").classList.add("on");
         document.getElementById("fq").value = findQ;
@@ -2637,12 +2792,46 @@
       return state.view === "detail" && state.current && state.current.id === id;
     }
 
+    /* 回放过程中边拉边画：第一段正文通常 0.5~1s 就到了，
+     * 不必等整条会话回放完（尾部还要等静默收尾）。
+     * 只有「本来没有快照」时才开这个轮询 —— 有快照的场景已经在显示内容了，别抖。 */
+    var peekTimer = null;
+    var peekN = 0;
+    var peekStartedAt = 0;
+    function stopPeek() {
+      if (peekTimer) { clearInterval(peekTimer); peekTimer = null; }
+    }
+    function startPeek() {
+      if (SB.state() === "off" || typeof SB.peek !== "function") return;
+      stopPeek();
+      peekStartedAt = Date.now();
+      peekTimer = setInterval(function () {
+        if (!stillHere() || Date.now() - peekStartedAt > 90000) return stopPeek();
+        SB.peek(id).then(function (r) {
+          if (!stillHere()) return stopPeek();
+          if (!r || r.ok !== true || !r.n || r.n <= peekN) return;
+          peekN = r.n;
+          paint({
+            id: id,
+            ok: true,
+            title: r.title || it.title,
+            stats: r.stats,
+            messages: r.messages,
+            events: r.events,
+            fetchedAt: Date.now(),
+            live: true
+          }, "live");
+        });
+      }, 280);
+    }
+
     function fromCloud() {
       if (SB.state() === "off") return Promise.reject(new Error("service 不可用"));
-      return SB.fetchBody(id).then(function (r) {
+      return SB.fetchBody(id, it.ts ? { ts: it.ts } : null).then(function (r) {
         var shard = r.shard || r;
         shard.id = id;
         acceptShard(it, shard, "cloud");
+        stopPeek();
         if (stillHere()) paint(shard, "cloud");
         return shard;
       });
@@ -2674,16 +2863,19 @@
 
     var snap = SESSIONS[id];
     var hasSnap = !!(snap && (snap.messages || []).length);
-    if (hasSnap) paint(snap, "snap");
+    /* 预取/刚拉过的云端正文按「云端最新」展示，别再走快照那套提醒 */
+    if (hasSnap) paint(snap, snap.src === "cloud" ? "cloud" : "snap");
     else {
       body.appendChild(stateBox(
         "正在从云端拉取正文…",
         SB.state() === "off" ? "云端直连不可用，先看本机快照。" : "走扩展内的 Node 服务直连云端，不用扫码。"
       ));
+      startPeek();
     }
 
     fromCloud().catch(function (e) {
       log("cloud/fail", e.message + (e.code ? " [" + e.code + "]" : ""));
+      stopPeek();
       if (hasSnap) return;            // 已经有快照在显示，失败就不打扰
       fromLocal(function () {
         if (!it.n) toast("没拉到正文，可以先「回到会话」看最新");
@@ -2968,9 +3160,38 @@
   };
 
   document.getElementById("dChat").onclick = function () {
-    if (state.current) openSessionInClient(state.current.id);
+    if (!state.current) return;
+    /* 小程序/App 来源在客户端里没有正文，主按钮直接给能用的那个 */
+    if (webFirst(state.current.origin)) {
+      return openExternal(WEB + "/app/conversation/" + state.current.id);
+    }
+    openSessionInClient(state.current.id);
+  };
+  document.getElementById("dChatForce").onclick = function () {
+    if (state.current) openSessionInClient(state.current.id, { force: true });
   };
   document.getElementById("dFill").onclick = continueChat;
+
+  /* 小程序 / App 来源的会话：客户端里通常只有一条空壳（「暂无对话记录」），
+   * 真正的历史只在云端。这类不给「回到会话」设陷阱，先问一句去哪儿。 */
+  function webFirst(origin) {
+    return origin === "workbuddy-mp" || origin === "workbuddy-app";
+  }
+  function pickModal(title, sub, tip, aLabel, onA, bLabel, onB) {
+    var m = document.getElementById("pickModal");
+    document.getElementById("pickTitle").textContent = title;
+    document.getElementById("pickSub").textContent = sub;
+    document.getElementById("pickTip").textContent = tip || "";
+    var a = document.getElementById("pickA");
+    var b = document.getElementById("pickB");
+    a.textContent = aLabel;
+    b.textContent = bLabel;
+    a.onclick = function () { m.hidden = true; if (onA) onA(); };
+    b.onclick = function () { m.hidden = true; if (onB) onB(); };
+    document.getElementById("pickX").onclick = function () { m.hidden = true; };
+    m.hidden = false;
+    b.focus({ preventScroll: true });
+  }
 
   /* -------- 顶栏「更多」菜单 -------- */
   var dMoreBtn = document.getElementById("dMore");
@@ -3003,39 +3224,122 @@
     else b.textContent = on ? "★" : "☆";
   }
 
+  /* 草稿按会话存本地：回列表再点回来，刚才写的那句话还在 */
+  var DRAFTS = {};
+  try { DRAFTS = JSON.parse(localStorage.getItem("wbcs.drafts") || "{}") || {}; } catch (e) {}
+  var draftTimer = null;
+  function saveDraft(id, text) {
+    if (!id) return;
+    if (text) DRAFTS[id] = text; else delete DRAFTS[id];
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(flushDrafts, 500);
+  }
+  function flushDrafts() {
+    clearTimeout(draftTimer);
+    try { localStorage.setItem("wbcs.drafts", JSON.stringify(DRAFTS)); } catch (e) {}
+  }
+  window.addEventListener("pagehide", flushDrafts);
+  window.addEventListener("beforeunload", flushDrafts);
+
   function setComposer(id, on) {
     var c = document.getElementById("composer");
     if (!c) return;
     var show = !!(on && id);
+    var prev = c.dataset.id;
     c.hidden = !show;
     c.dataset.id = show ? id : "";
     var db = document.getElementById("dBody");
     if (db) db.classList.toggle("with-cmp", show);
-    if (!show) { var i = document.getElementById("cw"); if (i) i.value = ""; }
+    var input = document.getElementById("cw");
+    if (!show) {
+      if (input) input.value = "";
+      hideCmpTip();
+      return;
+    }
+    /* 只在换会话时回填 + 收起确认条：流式重绘别动用户正在敲的内容 */
+    if (prev !== id) {
+      if (input) input.value = DRAFTS[id] || "";
+      hideCmpTip();
+    }
   }
 
-  function sendFromComposer() {
+  function showCmpTip(text, primaryLabel, onGo) {
+    var tip = document.getElementById("cmpTip");
+    document.getElementById("cmpTipText").textContent = text;
+    var go = document.getElementById("cmpGo");
+    go.textContent = primaryLabel;
+    go.onclick = function () { onGo(); };
+    tip.hidden = false;
+    tip.dataset.ready = "1";
+  }
+  function hideCmpTip() {
+    var tip = document.getElementById("cmpTip");
+    if (tip) { tip.hidden = true; tip.dataset.ready = ""; }
+  }
+
+  /**
+   * 底部输入条：回车不再「直接跳走」。
+   *
+   * v1.9 的做法是 openSessionInClient → 800ms 后 wb:message:fill，实际效果是
+   * 面板被切走、客户端输入框空的 —— 宿主把 fill 的内容推进了「新建会话草稿」，
+   * 而目标会话根本没收到，等于把用户写的话吞了。
+   *
+   * 现在改成两步，一步都不丢：
+   *   ① 回车：这句话先落草稿 + 进剪贴板，底下弹出确认条
+   *   ② 回车 / 点按钮：才真的切过去，并提示「Ctrl+V 粘一下」
+   */
+  function prepareSend() {
     var c = document.getElementById("composer");
     var id = c && c.dataset.id;
     if (!id) return;
     var input = document.getElementById("cw");
     var text = (input.value || "").trim();
     if (!text) { input.focus(); toast("先写一句要接着说的话"); return; }
-    openSessionInClient(id);
-    toast("正在切到原会话…", 1200);
-    setTimeout(function () {
-      if (fillBroken) return copy(text, "已复制这句话，到客户端输入框粘一下");
-      fillMessage(text).then(function () {
-        input.value = "";
-        toast("已打开原会话，这句话已填进输入框");
-      }).catch(function () {
-        copy(text, "已复制这句话，到客户端输入框粘一下");
-      });
-    }, 800);
+
+    var item = DATA.items.find(function (x) { return x.id === id; }) || { id: id, origin: "" };
+    saveDraft(id, text);
+    flushDrafts();   // 下一步就可能切走面板，草稿要立刻落盘
+
+    function go() {
+      if (webFirst(item.origin)) {
+        openExternal(WEB + "/app/conversation/" + id);
+        toast("已复制这句 · 网页版输入框里 Ctrl+V", 3200);
+        return;
+      }
+      openSessionInClient(id);
+      toast("已复制这句 · 到原会话输入框 Ctrl+V", 3200);
+    }
+
+    copyText(text).then(function (ok) {
+      showCmpTip(
+        (ok ? "已复制 " + text.length + " 字" : "复制失败，请手动选中复制") +
+          "。打开原会话后按 Ctrl+V 就能粘上，草稿也留着了。",
+        webFirst(item.origin) ? "网页版打开" : "打开原会话",
+        go
+      );
+      document.getElementById("cmpGo").focus({ preventScroll: true });
+    });
   }
-  document.getElementById("cSend").onclick = sendFromComposer;
+  document.getElementById("cSend").onclick = prepareSend;
+  document.getElementById("cmpBack").onclick = function () {
+    hideCmpTip();
+    document.getElementById("cw").focus();
+  };
+  document.getElementById("cw").addEventListener("input", function (ev) {
+    var c = document.getElementById("composer");
+    var id = c && c.dataset.id;
+    if (id) saveDraft(id, ev.target.value.trim());
+    hideCmpTip();
+  });
   document.getElementById("cw").addEventListener("keydown", function (ev) {
-    if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); sendFromComposer(); }
+    if (ev.key !== "Enter" || ev.isComposing) return;
+    ev.preventDefault();
+    var tip = document.getElementById("cmpTip");
+    if (tip && !tip.hidden && tip.dataset.ready === "1") {
+      document.getElementById("cmpGo").click();
+      return;
+    }
+    prepareSend();
   });
 
   // 会话内查找
@@ -3072,6 +3376,8 @@
     var typing = tag === "input" || tag === "select" || tag === "textarea";
 
     if (ev.key === "Escape" && !typing) {
+      var pm = document.getElementById("pickModal");
+      if (pm && !pm.hidden) { pm.hidden = true; return; }
       var sm = document.getElementById("snapModal");
       if (sm && !sm.hidden) { sm.hidden = true; return; }
       var dm2 = document.getElementById("dMenu");
@@ -3133,6 +3439,18 @@
       out.push("云端直连  : " + (SB.state() === "ok"
         ? ("service v" + si.version + " · pid " + si.pid + " · " + si.cache + " 条缓存 · via " + SB.style())
         : SB.state() === "off" ? ("不可用 —— " + SB.error()) : "检测中…"));
+      var lf = typeof SB.last === "function" ? SB.last() : null;
+      if (lf) {
+        var tm = (lf.shard && lf.shard.timings) || {};
+        var head = lf.cached
+          ? "缓存命中（" + (lf.cached === "ts" ? "云端未更新" : "3 分钟内") + "）"
+          : (Math.round((lf.elapsed || 0) / 100) / 10) + "s";
+        out.push("上次回放  : " + head +
+          (lf.cached ? "" :
+            "（票据 " + (tm.ticket || 0) + " / 握手 " + (tm.connect || 0) +
+            " / 首帧 " + (tm.firstFrame || 0) + " / 回放 " + (tm.replay || 0) + "ms）") +
+          " · " + ((lf.shard && (lf.shard.messages || []).length) || 0) + " 条");
+      }
       if (g && g.lines && g.lines.length) out.push("guest     : " + g.lines.join(" | "));
       setDiagHeader(out);
     }
@@ -3176,7 +3494,8 @@
           // 云端直连探活：拿不到 service 就永久降级，面板行为回到 1.8.0
           SB.probe().then(function () {
             refreshDiag();
-            setTimeout(prefetchRecent, 600);
+            SB.warm();                    // 顺手把到网关的 TLS 连接建好
+            setTimeout(prefetchRecent, 400);
           }).catch(function () { refreshDiag(); });
           return Bridge.invoke("wb:config:get", ["theme"], 3000).then(function (t) {
             var v = typeof t === "string" ? t : (t && (t.theme || t.mode));

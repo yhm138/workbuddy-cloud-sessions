@@ -21,9 +21,11 @@ const assert = require("assert");
 const { chromium } = require("playwright");
 const { startGateway, makeWb, SESSION_ID } = require("./mock-gateway.cjs");
 const { activate } = require("../server/index.cjs");
+const PKG_VERSION = require("../package.json").version;
 
 const ROOT = path.resolve(__dirname, "..");
 const NO_SERVICE = process.env.NO_SERVICE === "1";
+const MP_SESSION_ID = "2070359399505326080";
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css", ".svg": "image/svg+xml" };
 
 function serve() {
@@ -46,6 +48,8 @@ async function main() {
 
   const browser = await chromium.launch({ channel: "msedge", headless: true });
   const page = await browser.newPage();
+  /* 底部输入条会写剪贴板，断言要能读回来 */
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   const calls = [];
 
   await page.exposeFunction("hostInvoke", async (channel, args) => {
@@ -67,9 +71,17 @@ async function main() {
                 status: "completed",
                 updatedAt: new Date().toISOString(),
               },
+              {
+                // 小程序来源：客户端里那条是空壳，点「回到会话」必须先问一句
+                id: MP_SESSION_ID,
+                name: "小程序来的会话",
+                conversationOrigin: "workbuddy-mp",
+                status: "completed",
+                updatedAt: new Date().toISOString(),
+              },
             ],
-            total: 1,
-            pagination: { page: 1, size: 20, total: 1, totalPages: 1, hasNext: false },
+            total: 2,
+            pagination: { page: 1, size: 20, total: 2, totalPages: 1, hasNext: false },
           },
         };
       }
@@ -130,7 +142,7 @@ async function main() {
     return;
   }
 
-  assert.ok(/云端直连\s*:\s*service v1\.9\.1/.test(diag), "面板没有认出 service：" + diag);
+  assert.ok(new RegExp("云端直连\\s*:\\s*service v" + PKG_VERSION.replace(/\\./g, "\\\.")).test(diag), "面板没有认出 service：" + diag);
 
   // 自动同步 → 出现会话行
   await fr.locator(".row").first().waitFor({ timeout: 30000 });
@@ -150,6 +162,37 @@ async function main() {
   const sub = await fr.locator("#dSub").textContent();
   assert.ok(/云端最新/.test(sub), "副标题没标云端最新：" + sub);
   console.log("✓ 副标题：" + sub.trim());
+
+  /* 底部输入条：回车必须「先复制 + 留草稿」，不许直接跳走。
+   * v1.9 的回归就是这个 —— 一跳过去输入框空的，用户以为文字被吞了。 */
+  const hashBefore = await fr.locator("#composer").evaluate(() => location.hash);
+  await fr.locator("#cw").fill("顺便帮我核一下这个结论");
+  await fr.locator("#cw").press("Enter");
+  await fr.locator("#cmpTip:not([hidden])").waitFor({ timeout: 5000 });
+  const tip = await fr.locator("#cmpTipText").textContent();
+  const hashAfter = await fr.locator("#composer").evaluate(() => location.hash);
+  assert.strictEqual(hashAfter, hashBefore, "第一次回车不该离开面板");
+  assert.ok(/已复制/.test(tip), "确认条要说明已经复制：" + tip);
+  const draft = await fr.locator("#composer").evaluate(() => {
+    try { return (JSON.parse(localStorage.getItem("wbcs.drafts") || "{}"))[document.getElementById("composer").dataset.id] || ""; } catch (e) { return ""; }
+  });
+  assert.strictEqual(draft, "顺便帮我核一下这个结论", "这句话必须落成本地草稿，不能被吞掉");
+  const clip = await page.evaluate(() => navigator.clipboard.readText().catch(() => ""));
+  assert.strictEqual(clip, "顺便帮我核一下这个结论", "回车时要先把这句话放进剪贴板");
+  console.log("✓ 回车 → 复制 + 草稿 + 确认条（没跳走）");
+
+  /* 小程序来源的会话：「回到会话」不许直接跳进客户端的空壳，必须先给选择。 */
+  await fr.locator("#back").click();     // 回到列表
+  const mpRow = fr.locator('#listView .row[data-id="' + MP_SESSION_ID + '"]');
+  await mpRow.hover();   // ↗ 按钮只在 hover 时出现
+  await mpRow.locator(".row-go").click();
+  await fr.locator("#pickModal:not([hidden])").waitFor({ timeout: 5000 });
+  const pickSub = await fr.locator("#pickSub").textContent();
+  const pickB = await fr.locator("#pickB").textContent();
+  assert.ok(/暂无对话记录|只认桌面端/.test(pickSub), "要先说明客户端里为什么是空的：" + pickSub);
+  assert.ok(/网页版/.test(pickB), "默认动作应该是网页版：" + pickB);
+  console.log("✓ 小程序来源 → 先问去哪儿（" + pickB.trim() + "）");
+  await fr.locator("#pickX").click();
 
   console.log("通道调用：" + [...new Set(calls)].join(" · "));
   assert.ok(calls.includes("wb:extensions:$resolveLocalRpc"));

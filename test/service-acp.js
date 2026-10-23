@@ -46,12 +46,34 @@ async function main() {
   console.log(`✓ fetchBody → ${msgs.length} 条 · ${r1.shard.events} 事件 · ${r1.elapsed}ms`);
 
   const r2 = await svc.methods.fetchBody({ id: SESSION_ID });
-  assert.strictEqual(r2.cached, true, "第二次应该命中缓存");
+  assert.strictEqual(r2.cached, "ttl", "第二次应该命中缓存");
   console.log("✓ 第二次命中缓存");
+
+  /* 列表里的 updatedAt 没变时，缓存过了 TTL 也该直接复用（v1.10 的加速点）。
+   * 假网关不认识 ts，所以这里用「同一 ts 命中」验语义：只要 ts 一致就返回 ttl 缓存。 */
+  const r2b = await svc.methods.fetchBody({ id: SESSION_ID, ts: 123 });
+  assert.ok(r2b.cached, "带 ts 的重复请求不该重新回放");
+  console.log("✓ 重复请求走缓存（" + r2b.cached + "）");
 
   const r3 = await svc.methods.fetchBody({ id: SESSION_ID, force: true, idleMs: 600, maxMs: 8000 });
   assert.strictEqual(r3.cached, false, "force 应该绕过缓存");
-  console.log("✓ force 绕过缓存，重新回放");
+  assert.ok(r3.shard.timings && r3.shard.timings.ticket >= 0, "结果里要带耗时拆解");
+  console.log("✓ force 绕过缓存，重新回放（" + r3.elapsed + "ms）");
+
+  /* v1.10：回放过程中要能 peek 到半成品，面板靠它边等边画。
+   * 这里单独开一次 force 拉取，在途中读 peek。 */
+  const watching = svc.methods.fetchBody({ id: SESSION_ID, force: true, idleMs: 900, maxMs: 8000 });
+  await new Promise((r) => setTimeout(r, 250));
+  const mid = svc.methods.peek({ id: SESSION_ID });
+  assert.strictEqual(mid.ok, true);
+  assert.strictEqual(mid.live, true, "回放中 peek 必须标 live");
+  assert.ok(mid.n >= 1, "回放中至少能看到 1 条：" + JSON.stringify(mid).slice(0, 200));
+  console.log("✓ peek 回放中 → " + mid.n + " 条 / " + mid.events + " 事件");
+  const done = await watching;
+  assert.strictEqual(done.ok, true, "watch 的这次拉取也要成功");
+  const after = svc.methods.peek({ id: SESSION_ID });
+  assert.strictEqual(after.live, false, "拉完必须清掉半成品，别让 peek 一直报 live");
+  console.log("✓ 拉完清掉半成品");
 
   const bad = await svc.methods.fetchBody({ id: "nope", idleMs: 600, maxMs: 4000 });
   assert.strictEqual(bad.ok, false);

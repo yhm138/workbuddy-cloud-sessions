@@ -1,6 +1,6 @@
 {
   "name": "workbuddy-cloud-sessions",
-  "version": "1.9.1",
+  "version": "1.10.0",
   "description": "把 WorkBuddy 桌面端看不见的云端会话（网页版 / 微信小程序 / 定时任务）搬到侧栏：全量抓取正文、本地渲染、全文搜索、Markdown 导出。",
   "license": "MIT",
   "author": "yhm138",

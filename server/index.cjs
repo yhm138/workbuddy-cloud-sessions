@@ -20,28 +20,33 @@
  *     再用 `wb:extensions:$invokeLocalRpcFallback` 调用
  */
 
-const { loadSession } = require("./acp.cjs");
+const { loadSession, warmup } = require("./acp.cjs");
 const { parseEvents } = require("./parse.cjs");
 
 /** 与 package.json 保持一致（CI 会比对；部署目录里没有 package.json，只能写死） */
-const VERSION = "1.9.1";
+const VERSION = "1.10.0";
 const WEB = "https://www.workbuddy.cn";
 
 /** 正文缓存：重开同一条会话不再重新回放 */
 const CACHE_TTL = 3 * 60 * 1000;
 const CACHE_MAX = 24;
+/** 列表里的 updatedAt 没变时，就算过了 TTL 也可以直接复用（30 分钟内可信） */
+const CACHE_FRESH_BY_TS = 30 * 60 * 1000;
 /** 同时回放的会话数：网关对并发很敏感，2 是实测比较稳的值 */
 const MAX_CONCURRENT = 2;
-/** 单条会话硬超时 / 空闲收尾 */
+/** 单条会话硬超时 / 空闲收尾（v1.10 从 4000 收到 1400，见 acp.cjs 注释） */
 const DEFAULT_MAX_MS = 60000;
-const DEFAULT_IDLE_MS = 4000;
+const DEFAULT_IDLE_MS = 1400;
+const DEFAULT_ACK_IDLE_MS = 700;
 /** 一次返回给 iframe 的最大消息数，避免把 IPC 塞爆 */
 const MAX_MESSAGES = 6000;
 
-const cache = new Map(); // id -> { shard, at }
+const cache = new Map(); // id -> { shard, at, ts }
+const partials = new Map(); // id -> { events, parsed, parsedN, startedAt, at }
 const inflight = new Map(); // id -> Promise
 const recent = []; // 诊断用环形日志
 const calls = []; // 最近几次方法调用的参数形状（排查参数约定用）
+let last = null; // 最近一次回放的耗时拆解（诊断面板显示用）
 
 let active = 0;
 const waiting = [];
@@ -161,9 +166,22 @@ function toShardMessages(messages) {
 async function fetchShard(wb, id, opts) {
   const t0 = Date.now();
   const ticket = await fetchTicket(wb, id);
+  const tTicket = Date.now() - t0;
+
+  /* 边回放边留一份「半成品」：面板可以边等边画，不用盯着转圈。
+   * 只存事件引用，不复制内容，内存代价可以忽略。 */
+  const live = { events: [], parsed: null, parsedN: -1, startedAt: t0, at: t0 };
+  partials.set(id, live);
+  const onEvent = (ev) => {
+    live.events.push(ev);
+    live.at = Date.now();
+  };
+
   const res = await loadSession(ticket.link, ticket.token, ticket.sessionId, {
     idleMs: opts.idleMs || DEFAULT_IDLE_MS,
+    ackIdleMs: opts.ackIdleMs || DEFAULT_ACK_IDLE_MS,
     maxMs: opts.maxMs || DEFAULT_MAX_MS,
+    onEvent,
     onWarn: (w) => note(`warn ${id} ${w}`),
   });
   const parsed = parseEvents(res.events);
@@ -173,6 +191,7 @@ async function fetchShard(wb, id, opts) {
     messages = messages.slice(-MAX_MESSAGES);
     truncated = true;
   }
+  const timings = Object.assign({ ticket: tTicket, events: res.events.length }, res.timings || {});
   const shard = {
     id,
     ok: true,
@@ -182,20 +201,33 @@ async function fetchShard(wb, id, opts) {
     truncated,
     events: res.events.length,
     reason: res.reason,
+    timings,
     fetchedAt: Date.now(),
     source: "acp",
   };
-  note(`ok ${id} ${messages.length} msgs / ${res.events.length} ev · ${Math.round((Date.now() - t0) / 1000)}s · ${res.reason}`);
+  note(
+    `ok ${id} ${messages.length} msgs / ${res.events.length} ev · ${Math.round((Date.now() - t0) / 100) / 10}s ` +
+      `(票据 ${tTicket} 握手 ${timings.connect || 0} 首帧 ${timings.firstFrame || 0} 回放 ${timings.replay || 0}) · ${res.reason}`
+  );
+  last = { id, at: Date.now(), msgs: messages.length, reason: res.reason, timings };
   return { shard, elapsed: Date.now() - t0 };
 }
 
-function remember(id, shard) {
+function remember(id, shard, ts) {
   cache.delete(id);
-  cache.set(id, { shard, at: Date.now() });
+  cache.set(id, { shard, at: Date.now(), ts: ts || 0 });
   while (cache.size > CACHE_MAX) {
     const oldest = cache.keys().next().value;
     cache.delete(oldest);
   }
+}
+
+/** 半成品解析结果：事件没变就复用上一次的，别每次都重扫 */
+function parseLive(live) {
+  if (live.parsedN === live.events.length && live.parsed) return live.parsed;
+  live.parsed = parseEvents(live.events);
+  live.parsedN = live.events.length;
+  return live.parsed;
 }
 
 /* 宿主调用 service 方法的真实形态是 `fn(context, payload)`：
@@ -314,8 +346,10 @@ function activate(wb) {
         startedAt,
         cache: [...cache.keys()],
         inflight: [...inflight.keys()],
+        partials: [...partials.keys()],
         active,
         waiting: waiting.length,
+        last,
         calls: calls.slice(-8),
         recent: recent.slice(-20),
       };
@@ -342,7 +376,7 @@ function activate(wb) {
 
     /**
      * 拉一条会话的完整正文。
-     * @param {{id:string, force?:boolean, idleMs?:number, maxMs?:number}} payload
+     * @param {{id:string, force?:boolean, ts?:number, idleMs?:number, maxMs?:number}} payload
      * @returns {{ok:true, shard:object, cached:boolean, elapsed:number}|{ok:false, code:string, error:string}}
      */
     async fetchBody(...args) {
@@ -353,14 +387,27 @@ function activate(wb) {
         note(`fetchBody 没有 id · args=${shapeOf(args)}`);
         return { ok: false, code: "BAD_ARGS", error: "缺少 id · 参数 " + shapeOf(args) };
       }
-      // 参数里没捞到业务对象时（只从 id 兜底），force 得单独找
+      // 参数里没捞到业务对象时（只从 id 兜底），force / ts 得单独找
       const force = p.force || args.some((a) => a && typeof a === "object" && a.force === true);
+      const ts = Number(p.ts || 0);
 
       const hit = cache.get(id);
-      if (!force && hit && Date.now() - hit.at < CACHE_TTL) {
-        cache.delete(id);
-        cache.set(id, hit);
-        return { ok: true, shard: hit.shard, cached: true, elapsed: 0 };
+      if (!force && hit) {
+        const age = Date.now() - hit.at;
+        /* 两条命中路径：
+         *   ① 3 分钟内 —— 刚拉过，直接用
+         *   ② 列表里 updatedAt 没变 —— 云端确实没动过，30 分钟内都算数
+         * ② 是「拉过一次之后来回点」的主要加速点：省掉整轮票据 + 回放。 */
+        if (age < CACHE_TTL) {
+          cache.delete(id);
+          cache.set(id, hit);
+          return { ok: true, shard: hit.shard, cached: "ttl", elapsed: 0 };
+        }
+        if (ts && hit.ts && Number(hit.ts) === ts && age < CACHE_FRESH_BY_TS) {
+          cache.delete(id);
+          cache.set(id, hit);
+          return { ok: true, shard: hit.shard, cached: "ts", elapsed: 0 };
+        }
       }
 
       const running = inflight.get(id);
@@ -372,7 +419,7 @@ function activate(wb) {
       const job = withSlot(async () => {
         try {
           const { shard, elapsed } = await fetchShard(wb, id, p);
-          remember(id, shard);
+          remember(id, shard, ts);
           return { ok: true, shard, cached: false, elapsed };
         } catch (e) {
           const msg = String((e && e.message) || e);
@@ -384,6 +431,8 @@ function activate(wb) {
             error: msg.slice(0, 300),
             status: e && e.status,
           };
+        } finally {
+          partials.delete(id);
         }
       }).finally(() => inflight.delete(id));
 
@@ -391,9 +440,41 @@ function activate(wb) {
       return job;
     },
 
+    /**
+     * 回放进度（面板边等边画用）。
+     * 只回传已经解析好的消息，调用方按 n 增长决定要不要重绘。
+     */
+    peek(...args) {
+      const p = pickParams(...args) || {};
+      const id = resolveId(p, args);
+      if (!id) return { ok: false, code: "BAD_ARGS", n: 0 };
+      const live = partials.get(id);
+      if (!live) return { ok: true, id, n: 0, events: 0, live: false };
+      const parsed = parseLive(live);
+      return {
+        ok: true,
+        id,
+        live: true,
+        n: parsed.messages.length,
+        events: live.events.length,
+        title: parsed.title || null,
+        stats: parsed.stats,
+        messages: toShardMessages(parsed.messages),
+        elapsed: Date.now() - live.startedAt,
+        idle: Date.now() - live.at,
+      };
+    },
+
+    /** 预热：先把到网关的 TLS 连接建起来，第一次点会话就少一次握手 */
+    warm(...args) {
+      record("warm", args);
+      return { ok: warmup(WEB), warmed: true };
+    },
+
     /** 清掉缓存（强制下一次走网络） */
     clear() {
       cache.clear();
+      partials.clear();
       return { ok: true, cleared: true };
     },
   };
@@ -404,6 +485,7 @@ function activate(wb) {
       disposed = true;
       note("dispose");
       cache.clear();
+      partials.clear();
     },
   };
 }

@@ -197,7 +197,9 @@ flowchart LR
 4. 面板侧：`wb:extensions:$resolveLocalRpc` 拿票据 → `$invokeLocalRpcFallback` 调 `fetchBody`
 
 并发闸门 2 条、内存缓存 3 分钟、票据过期自动重换；service 起不来时整套降级回快照模式。
-协议细节（票据字段、`activate` 返回值、`processPolicy` 写法、踩过的坑）见 PROTOCOL.md 6.9。
+v1.10 起回放是**流式**的：`fetchBody` 之外多了一个 `peek`，面板每 280ms 取一次已解析的消息，
+边拉边画（实测把「空转 4 秒」压到「1 秒见正文」）。
+协议细节（票据字段、`activate` 返回值、`processPolicy` 写法、踩过的坑）见 PROTOCOL.md 6.9 / 6.10。
 
 字段、事件类型、扩展加载规则、深链与握手的实现细节，都在 **[docs/PROTOCOL.md](docs/PROTOCOL.md)**。
 
@@ -209,13 +211,13 @@ flowchart LR
 
 | 能力 | 面板内 | 说明 |
 | --- | --- | --- |
-| 读「最新」正文 | ✅ service 在跑时 | 点开就从云端回放，正文顶上标「云端最新 · hh:mm（N 个事件）」 |
+| 读「最新」正文 | ✅ service 在跑时 | 点开就从云端回放，正文顶上标「云端最新 · hh:mm（N 个事件）」；**回放中边拉边画**，第一段正文 1 秒内到 |
 | 读历史正文 | ✅ 退回本机快照 | service 不可用时自动降级，标「本机快照 · 可能不是最新」并弹一次说明 |
-| 小程序 / 网页版会话正文 | ✅ service 在跑时 | 客户端自己打开这类会话可能是空的，面板能直接回放 |
+| 小程序 / 网页版会话正文 | ✅ service 在跑时 | 客户端自己打开这类会话是空的（「暂无对话记录」），面板能直接回放，主按钮也会改成「网页版打开」 |
 | 全文搜索 | ✅ 快照 + 已直连拉过的 | 搜的是「手上已有的正文」：`wbcs fetch` 的快照，加上本次面板里从云端拉回来的 |
-| 接着聊 | ✅ 通过深链 | 「回到会话」把客户端切到同一个 Session，历史和后续都在那边 |
+| 接着聊 | ✅ 复制 + 深链 | 底部写一句 → 回车先复制并留草稿 → 再回车打开原会话，`Ctrl+V` 粘上 |
 | 在面板里发消息 | ❌ | 面板只读，不碰会话状态；要聊就回原会话 |
-| 3 分钟内重复打开 | ⚡ 走缓存 | service 内存缓存 3 分钟，`⋯ → 从云端拉最新正文` 可强制重拉 |
+| 重复打开同一条 | ⚡ 秒开 | 3 分钟内直接命中缓存；云端 `updatedAt` 没变的话 30 分钟内都复用 |
 
 所以界面里会看到两种顶部提示，别混淆：
 
@@ -281,9 +283,9 @@ npm run release             # 生成 dist/*-win-x64.zip（需要 unzip / zip 命
 node tools/demo-shots.js    # 重新生成 docs/images/*.png
 ```
 
-版本号必须四处一致：`package.json`、`extension.json`、`distribution.json`，以及
-`server/index.cjs` 里的 `VERSION`（部署目录里没有 package.json，service 只能写死）。
-页面另有一份 `PAGE_VERSION`，宿主按清单版本给 iframe 打 `?v=`，不一致时面板顶部会提示「重启即可」。
+版本号必须五处一致：`package.json`、`extension.json`、`distribution.json`、
+`server/index.cjs` 的 `VERSION`（部署目录里没有 package.json，service 只能写死），
+以及页面里的 `PAGE_VERSION`（宿主按清单版本给 iframe 打 `?v=`，不一致时面板会提示「重启即可」）。
 `wbcs build` 与 CI 都会校验这几处。
 
 ---

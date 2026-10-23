@@ -34,6 +34,44 @@ const UA =
 const ORIGIN = "https://www.workbuddy.cn";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * 连接池：一次回放要连 3 次（SSE + initialize + session/load），
+ * 没有 keep-alive 每次都是全新 TLS 握手，实测白白多花 300~700ms。
+ * 网关对并发敏感，所以 maxSockets 压得比较低。
+ */
+const agents = {
+  "http:": new http.Agent({ keepAlive: true, maxSockets: 6, keepAliveMsecs: 15000 }),
+  "https:": new https.Agent({ keepAlive: true, maxSockets: 6, keepAliveMsecs: 15000 }),
+};
+
+function agentFor(u) {
+  return agents[u.protocol] || agents["https:"];
+}
+
+/** 预热：提前把到网关的 TLS 连接建好，挂进 keep-alive 池，第一次点会话就少一次握手 */
+function warmup(origin) {
+  try {
+    const u = new URL(origin);
+    const req = clientFor(u).request(
+      {
+        hostname: u.hostname,
+        port: u.port || (u.protocol === "http:" ? 80 : 443),
+        path: "/",
+        method: "HEAD",
+        agent: agentFor(u),
+        timeout: 4000,
+      },
+      (res) => res.resume()
+    );
+    req.on("error", () => {});
+    req.on("timeout", () => req.destroy());
+    req.end();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function baseHeaders(token, extra) {
   return {
     accept: "application/json, text/event-stream",
@@ -58,6 +96,7 @@ function rpc(link, token, connId, payload, timeout = 40000) {
         port: u.port || 443,
         path: u.pathname + (u.search || ""),
         method: "POST",
+        agent: agentFor(u),
         headers: baseHeaders(token, {
           "content-type": "application/json",
           "acp-connection-id": connId,
@@ -87,16 +126,23 @@ function rpc(link, token, connId, payload, timeout = 40000) {
  * @param {string} link      /session 接口返回的消息服务地址
  * @param {string} token     沙箱网关 JWT
  * @param {string} sessionId
- * @param {{idleMs?:number, maxMs?:number, onEvent?:Function}} opts
- * @returns {Promise<{events:object[], reason:string, connId:string|null}>}
+ * @param {{idleMs?:number, ackIdleMs?:number, maxMs?:number, onEvent?:Function, onWarn?:Function}} opts
+ * @returns {Promise<{events:object[], reason:string, connId:string|null, timings:object}>}
  */
 function loadSession(link, token, sessionId, opts = {}) {
-  const idleMs = opts.idleMs || 4000;
+  // 收尾窗口：历史是「回放」，没有结束标记，只能靠静默判定。
+  // v1.9 之前写死 4000ms，一条会话哪怕 200ms 就回放完了也要干等 4 秒 —— 这是「等待略长」的主因。
+  const replayIdle = opts.idleMs || 1400;
+  // session/load 已有回执后，尾部一般只剩残留帧，可以更早收
+  const ackIdle = opts.ackIdleMs || 700;
   const maxMs = opts.maxMs || 120000;
+  const t0 = Date.now();
   const events = [];
   let buf = "";
   let closed = false;
   let connId = null;
+  let loadAcked = false;
+  const timings = { connect: 0, firstFrame: 0, init: 0, load: 0, replay: 0, total: 0 };
 
   return new Promise((resolve) => {
     const u = new URL(link);
@@ -111,16 +157,23 @@ function loadSession(link, token, sessionId, opts = {}) {
       try {
         sse && sse.destroy();
       } catch {}
-      resolve({ events, reason, connId });
+      timings.total = Date.now() - t0;
+      resolve({ events, reason, connId, timings });
     };
+
+    /** 静默多久算回放结束：拿到 load 回执后收紧，剩下的都是尾部帧 */
+    const idleFor = () => (loadAcked && events.length ? ackIdle : replayIdle);
 
     const bump = () => {
       clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => finish("idle"), idleMs);
+      idleTimer = setTimeout(() => finish("idle"), idleFor());
     };
 
     let readyResolve;
     const ready = new Promise((r) => (readyResolve = r));
+    let frameResolve;
+    const firstFrame = new Promise((r) => (frameResolve = r));
+    let frameSeen = false;
 
     const sse = clientFor(u).request(
       {
@@ -128,6 +181,7 @@ function loadSession(link, token, sessionId, opts = {}) {
         port: u.port || 443,
         path: u.pathname + (u.search || ""),
         method: "GET",
+        agent: agentFor(u),
         headers: baseHeaders(token, { accept: "text/event-stream" }),
       },
       (res) => {
@@ -138,10 +192,17 @@ function loadSession(link, token, sessionId, opts = {}) {
         }
         // 关键：连接 id 由服务端在响应头下发
         connId = res.headers["acp-connection-id"] || crypto.randomUUID();
+        timings.connect = Date.now() - t0;
         readyResolve(true);
         res.setEncoding("utf8");
         bump();
         res.on("data", (chunk) => {
+          // 首帧一到就能发 initialize，不必像老版本那样 sleep(600) 干等
+          if (!frameSeen) {
+            frameSeen = true;
+            timings.firstFrame = Date.now() - t0;
+            frameResolve(true);
+          }
           buf += chunk;
           let idx;
           while ((idx = buf.indexOf("\n")) >= 0) {
@@ -153,6 +214,7 @@ function loadSession(link, token, sessionId, opts = {}) {
             try {
               const ev = JSON.parse(line);
               events.push(ev);
+              timings.replay = Date.now() - t0;
               if (opts.onEvent) opts.onEvent(ev);
               bump();
             } catch {
@@ -176,7 +238,8 @@ function loadSession(link, token, sessionId, opts = {}) {
     (async () => {
       const ok = await Promise.race([ready, sleep(10000).then(() => false)]);
       if (!ok) return;
-      await sleep(600); // 等握手帧落地
+      // 首帧握手：正常情况下 0~80ms；服务端抽风就最多等 700ms，再不行照旧往下走
+      await Promise.race([firstFrame, sleep(700)]);
 
       const r0 = await rpc(link, token, connId, {
         jsonrpc: "2.0",
@@ -196,10 +259,10 @@ function loadSession(link, token, sessionId, opts = {}) {
           },
         },
       });
+      timings.init = Date.now() - t0;
       if (r0.status !== 200 && r0.status !== 202) {
         opts.onWarn && opts.onWarn(`initialize → ${r0.status} ${(r0.body || r0.error || "").slice(0, 160)}`);
       }
-      await sleep(300);
 
       const r1 = await rpc(link, token, connId, {
         jsonrpc: "2.0",
@@ -207,13 +270,15 @@ function loadSession(link, token, sessionId, opts = {}) {
         method: "session/load",
         params: { sessionId, cwd: "/workspace", mcpServers: [] },
       });
+      timings.load = Date.now() - t0;
       if (r1.status !== 200 && r1.status !== 202) {
         opts.onWarn && opts.onWarn(`session/load → ${r1.status} ${(r1.body || r1.error || "").slice(0, 200)}`);
       } else {
-        bump();
+        loadAcked = true;
+        bump(); // 换成更短的收尾窗口；后面还有帧就继续顺延
       }
     })();
   });
 }
 
-module.exports = { loadSession, rpc };
+module.exports = { loadSession, rpc, warmup };

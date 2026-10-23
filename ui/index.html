@@ -251,7 +251,7 @@
   }
   .brow { display: flex; align-items: center; gap: 5px; min-width: 0; }
   .bar .dt { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-  .bar .ds { color: var(--fg-mute); font-size: 11px; }
+  .bar .ds { color: var(--fg-mute); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bar .col { min-width: 0; display: flex; flex-direction: column; flex: 1 1 auto; overflow: hidden; }
   .bar button.icon { width: 26px; padding: 0; justify-content: center; color: var(--fg-dim); border-color: transparent; }
   .bar button.icon:hover { color: var(--fg); }
@@ -419,7 +419,6 @@
   body[data-view="detail"] > footer,
   body[data-view="stats"] > footer { display: none; }
   #detailView #dBody { padding-bottom: 12px; }
-  #dBody.with-cmp .thread { padding-bottom: 78px; }
 
   #detailView .bar {
     flex-direction: row; align-items: center; gap: 4px;
@@ -475,51 +474,37 @@
   details.fold > summary:hover { background: var(--bg-hover); }
   details.fold[open] { background: var(--bg-soft); border: 1px solid var(--line-soft); }
 
-  .composer {
-    position: sticky; bottom: 0; z-index: 6;
-    display: flex; flex-direction: column; gap: 6px;
-    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
-    background: var(--bg);
-    box-shadow: 0 -10px 18px -14px rgba(0, 0, 0, .22);
+  /* 对话结束卡：面板是只读的，出口只有「融合会话」和「网页版」两条。
+     不给输入框 —— 之前那版能在面板里打字，跳过去却填不进原会话，等于骗人。 */
+  .endcard {
+    margin: 20px 0 10px;
+    padding: 14px 14px 12px;
+    border: 1px solid var(--line-soft);
+    border-radius: 12px;
+    background: var(--bg-soft);
   }
-  .composer[hidden] { display: none; }
-  .composer .cmp-row { display: flex; gap: 8px; align-items: center; }
-  .composer input {
-    flex: 1 1 auto; min-width: 0; height: 36px; padding: 0 14px;
-    border: 1px solid var(--line); border-radius: 18px;
-    background: var(--bg-soft); font-size: 13.5px; color: var(--fg);
+  .endcard .et {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 13px; font-weight: 600; color: var(--fg);
   }
-  .composer input:focus { outline: none; border-color: rgba(0, 0, 0, .18); background: var(--bg); }
-  .composer .cmp-row > button {
-    flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%; padding: 0;
-    display: flex; align-items: center; justify-content: center;
-    background: var(--accent, #111); color: #fff; border: none; cursor: pointer;
+  .endcard .et .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--fg-mute); opacity: .5;
   }
-  .composer button:disabled { opacity: .35; cursor: default; }
-
-  /* 写完一句话后的确认条：先复制到剪贴板，再决定去哪儿。
-     不直接跳走 —— 深链跳过去输入框是空的，用户会以为文字丢了。 */
-  .cmp-tip {
-    display: flex; flex-direction: column; gap: 6px;
-    padding: 8px 10px; border-radius: 10px;
-    background: var(--bg-soft); border: 1px solid var(--line-soft);
-    font-size: 12.5px; color: var(--fg-mute);
+  .endcard .es {
+    margin-top: 5px; font-size: 12.5px; line-height: 1.65; color: var(--fg-mute);
   }
-  .cmp-tip[hidden] { display: none; }
-  .cmp-tip .ct { line-height: 1.55; }
-  .cmp-tip .ck { color: #1a7f37; font-weight: 700; margin-right: 4px; }
-  html[data-theme="dark"] .cmp-tip .ck { color: #58c777; }
-  .cmp-tip .acts { display: flex; gap: 8px; justify-content: flex-end; }
-  .cmp-tip button {
-    flex: 0 0 auto; height: 26px; padding: 0 10px; border-radius: 13px;
+  .endcard .ea { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .endcard .ea button {
+    height: 30px; padding: 0 13px; border-radius: 15px;
+    display: inline-flex; align-items: center; gap: 5px;
     border: 1px solid var(--line); background: var(--bg); color: var(--fg);
-    font-size: 12px; cursor: pointer; white-space: nowrap;
+    font-size: 12.5px; cursor: pointer; white-space: nowrap;
   }
-  .cmp-tip button.primary { background: var(--accent, #111); border-color: transparent; color: #fff; }
-  @media (min-width: 560px) {
-    .cmp-tip { flex-direction: row; align-items: center; }
-    .cmp-tip .acts { margin-left: auto; }
-  }
+  .endcard .ea button.primary { background: var(--accent, #111); border-color: transparent; color: #fff; }
+  .endcard .ea button.ghost { border-color: transparent; background: transparent; color: var(--fg-mute); padding: 0 4px; }
+  .endcard .ea button.ghost:hover { color: var(--fg); }
+  .endcard .ea button:active { transform: translateY(.5px); }
 
   /* 来源 chips 横向滚动时右缘淡出，避免硬裁切 */
   header .chips {
@@ -535,7 +520,7 @@
   #listView .row .sub .mono { display: none; }
   #listView .group-h { padding: 12px 12px 4px; }
 
-  @media (min-width: 760px) { .thread, .composer { max-width: 720px; margin-left: auto; margin-right: auto; } }
+  @media (min-width: 760px) { .thread, .endcard { max-width: 720px; margin-left: auto; margin-right: auto; } }
 </style>
 <script>
 /* ------------------------------------------------------------------
@@ -704,12 +689,11 @@
         <div class="ds" id="dSub">—</div>
       </div>
       <button id="dFind" class="icon" title="会话内查找（Ctrl+F）" aria-label="查找"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="7" cy="7" r="4.1"/><path d="M10.1 10.1 13.4 13.4"/></svg></button>
-      <button id="dChat" class="primary go" title="在客户端里打开这条会话本身（同一个 Session），接着在它里面聊">回到会话</button>
+      <button id="dChat" class="primary go" title="面板只读；要继续对话，回客户端的融合会话（同一个 Session）">回融合会话</button>
       <div class="menu-wrap">
         <button id="dMore" class="icon" title="更多" aria-haspopup="true" aria-expanded="false">⋯</button>
         <div class="menu" id="dMenu" hidden>
           <button id="dPull" data-close><span>从云端拉最新正文</span><em>直连云端 · 不用扫码</em></button>
-          <button id="dFill" data-close><span>填上下文</span><em>把历史塞进当前输入框</em></button>
           <button id="dChatForce" data-close hidden><span>回客户端（可能为空）</span><em>小程序 / App 来源在客户端里没有正文</em></button>
           <button id="dWeb" data-close><span>在网页版打开</span></button>
           <button id="dMd" data-close><span>复制为 Markdown</span></button>
@@ -726,21 +710,6 @@
       <button id="fclose" title="关闭">✕</button>
     </div>
     <div id="dBody"></div>
-    <div class="composer" id="composer" hidden>
-      <div class="cmp-row">
-        <input id="cw" placeholder="写一句，带回原会话接着问…" autocomplete="off" spellcheck="false" />
-        <button id="cSend" title="复制这句并打开原会话（Enter）">
-          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12.5V3.5M4 7l4-3.5L12 7"/></svg>
-        </button>
-      </div>
-      <div class="cmp-tip" id="cmpTip" hidden>
-        <span class="ct" id="cmpTipText">已复制</span>
-        <span class="acts">
-          <button id="cmpBack">再改改</button>
-          <button class="primary" id="cmpGo">打开原会话</button>
-        </span>
-      </div>
-    </div>
   </div>
 
   <div id="statsView">
@@ -793,22 +762,6 @@
   </div>
 </div>
 
-<div class="modal" id="fillModal" hidden>
-  <div class="card">
-    <h3>上下文已经填进 WorkBuddy 的输入框了</h3>
-    <p class="sub" id="fillSub">—</p>
-    <ol>
-      <li>先离开这个面板：点左上角 <b>←</b>，或按 <b>Esc</b></li>
-      <li>回到对话页，<b>底部输入框</b>里就是这段历史上下文</li>
-      <li>接着输入你的问题，按 <b>Enter</b> 发送</li>
-    </ol>
-    <p class="tip" id="fillTip">如果回去发现输入框是空的（宿主有时会把内容丢进尚未打开的新会话），点下面的「复制上下文」直接粘贴即可。</p>
-    <div class="acts">
-      <button id="fillCopy">复制上下文</button>
-      <button id="fillOk" class="primary">知道了</button>
-    </div>
-  </div>
-</div>
 
 <script src="./data.js"></script>
 <script>
@@ -816,7 +769,7 @@
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.10.0";
+  var PAGE_VERSION = "1.11.0";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -836,7 +789,6 @@
      所以在内存里补一份同格式的索引，否则「搜得到」和「看得到」会对不上。 */
   var CLOUD_IDX = {};
   var FAV = loadFav();
-  var fillBroken = false;   // 宿主拒绝过一次 wb:message:fill 后，按钮退化成复制
 
   var state = {
     q: "",
@@ -873,7 +825,17 @@
     else txt = abs.slice(0, 10);
     return { txt: txt, abs: abs };
   }
-  function label(o) { return DATA.originLabels[o] || o || "未知来源"; }
+  /* data.js 里的来源表是构建时生成的；部署环境缺表时兜一层，别把
+     workbuddy-mp 这种原始值直接甩给用户看。 */
+  var ORIGIN_FALLBACK = {
+    agents: "云端 Agent",
+    "workbuddy-mp": "小程序",
+    "workbuddy-app": "App",
+    scheduler: "定时任务",
+    "workbuddy-deploy": "部署",
+    genie: "Genie",
+  };
+  function label(o) { return DATA.originLabels[o] || ORIGIN_FALLBACK[o] || o || "未知来源"; }
   /** toast 宽度有限，长错误只留前半截，完整内容仍进诊断日志 */
   function briefText(s, n) {
     s = String(s == null ? "" : s);
@@ -1200,17 +1162,21 @@
    * 所以从 iframe 里 window.open 就等价于"用系统浏览器打开"。
    * iframe 的 sandbox 带 allow-popups，这条能走通。
    */
-  function openExternal(url) {
+  function openExternal(url, what) {
     var hosted = !!(window.__WBCS_GUEST__ && window.__WBCS_GUEST__.port);
     var w = null;
-    try { w = window.open(url, "_blank", "noopener"); } catch (e) { w = null; }
+    var err = null;
+    try { w = window.open(url, "_blank", "noopener"); } catch (e) { err = e; }
+    var name = what || "网页";
     if (hosted) {
-      // 被宿主 deny 时这里返回 null，但已经转交系统浏览器了，不能当失败
+      // 宿主 setWindowOpenHandler 只放行 https → shell.openExternal，返回值恒为 null，
+      // 不能拿它判断成败；浏览器开在后台时用户容易以为"没反应"，所以给一句明确反馈。
       log("openExternal", "window.open → 系统浏览器 " + url);
-      toast("已在系统浏览器打开");
-      return;
+      toast("已交给默认浏览器打开" + name + " · 窗口可能在后台", 3200);
+      return true;
     }
-    if (!w) copy(url, "浏览器拦了新窗口，地址已复制");
+    if (err || !w) { copy(url, name + "链接已复制，粘到浏览器里打开"); return false; }
+    return true;
   }
 
   /**
@@ -1260,108 +1226,6 @@
         toast("没跳过去？点右上角 ↗ 用网页版打开同一条会话", 4200);
       }
     }, 3500);
-  }
-
-  /**
-   * 把内容填进 WorkBuddy 当前输入框（不自动发送），用于"开一条新会话接着问"。
-   * 通道：wb:message:fill，参数 [{ content: ContentBlock[], source }]
-   * 浏览器里没有宿主，调用必然失败，退回复制。
-   */
-  function fillMessage(text) {
-    return Bridge.invoke(
-      "wb:message:fill",
-      [{ content: [{ type: "text", text: text }], source: "cloud-sessions" }],
-      8000
-    );
-  }
-
-  /** 组装「接着聊」的上下文：取最后若干条有内容的对话，控制长度 */
-  function buildContext(shard, maxChars) {
-    maxChars = maxChars || 4000;
-    var picked = [];
-    (shard.messages || []).forEach(function (m) {
-      var r = m[0];
-      if (r !== "u" && r !== "a") return;
-      var t = String(m[1] || "").trim();
-      if (!t) return;
-      picked.push((r === "u" ? "我：" : "助手：") + t);
-    });
-    if (!picked.length) return "";
-
-    // 从最后往前累加，超长就截断前面的
-    var out = [], total = 0;
-    for (var i = picked.length - 1; i >= 0; i--) {
-      if (total + picked[i].length > maxChars) {
-        if (!out.length) out.unshift(picked[i].slice(0, maxChars));
-        break;
-      }
-      out.unshift(picked[i]);
-      total += picked[i].length;
-    }
-    var head =
-      "以下是云端会话「" + (shard.title || "") + "」的历史上下文" +
-      "（会话 ID " + shard.id + "，来源 " + (DATA.originLabels[shard.origin] || shard.origin) + "）。\n" +
-      "请基于这段上下文，接着往下聊我接下来要问的问题。\n\n" +
-      "---\n";
-    var tail = "\n---\n（以上为历史上下文）";
-    return head + out.join("\n\n") + tail;
-  }
-
-  function continueChat() {
-    if (!state.current) return;
-    var item = state.current;
-    loadSession(item.id, function (err, shard) {
-      if (err || !shard) return toast("这条会话没有本地正文，无法续聊");
-      var ctx = buildContext(shard);
-      if (!ctx) return toast("这条会话没有可用的对话内容");
-
-      if (fillBroken) return copyContext(ctx);
-
-      /* 先复制再 fill：宿主那条 fill 有时会静默丢进「新建会话草稿」，
-       * 剪贴板里留一份，至少不会白跑一趟。 */
-      copyText(ctx);
-
-      fillMessage(ctx).then(function () {
-        log("message/fill", "ok " + ctx.length + " 字符");
-        showFillHint(item, ctx);
-      }).catch(function (e) {
-        // 宿主拒了一次就别再让用户重复踩：按钮直接退化成"复制上下文"
-        fillBroken = true;
-        log("message/fill", "failed: " + e.message + (e.code ? " [" + e.code + "]" : ""));
-        var btn = document.getElementById("dFill");
-        if (btn) {
-          btn.textContent = "复制上下文";
-          btn.title = "宿主不允许扩展直接填充，改为复制到剪贴板（粘贴即可）";
-        }
-        copyContext(ctx);
-      });
-    });
-  }
-
-  function copyContext(ctx) {
-    copy(ctx, "已复制 " + ctx.length + " 字上下文，点到聊天框 Ctrl+V 就能接着聊");
-  }
-
-  /**
-   * 「接着聊」成功后的引导。
-   * 宿主只负责把内容塞进输入框，不会关面板、也不会切页面，用户在面板里看不到任何变化，
-   * 所以必须把"去哪看"写清楚，并留一个复制兜底（宿主偶尔会丢到未打开的新会话里）。
-   */
-  var fillCtx = "";
-  function showFillHint(item, ctx) {
-    fillCtx = ctx;
-    var sub = document.getElementById("fillSub");
-    if (sub) {
-      sub.textContent = "「" + (item.title || item.id) + "」的 " + ctx.length +
-        " 字上下文已写入输入框。它就在面板后面，不是没反应。";
-    }
-    var m = document.getElementById("fillModal");
-    if (m) m.hidden = false;
-    toast("已填入输入框 · " + ctx.length + " 字");
-  }
-  function closeFillHint() {
-    var m = document.getElementById("fillModal");
-    if (m) m.hidden = true;
   }
 
   /** Markdown 里的外链：统一交给 openExternal（window.open → 系统浏览器） */
@@ -2401,6 +2265,53 @@
   }
 
   /** 云端直连拉下来的正文：明确告诉用户「这就是最新」，别再让人怀疑是半截快照 */
+  /**
+   * 正文末尾的出口：接着聊只有两条路。
+   *
+   * 面板只读，这里**不放输入框**。之前那版让人在面板里打字，跳过去却填不进
+   * 原会话（宿主的 fill 只往「新建草稿」里塞），等于把话说丢了 —— 与其假装能
+   * 输入，不如把「回哪儿说」讲清楚。
+   */
+  function endCard(it, got, live) {
+    var web = webFirst(it.origin);
+    var card = el("div", "endcard");
+
+    var ttl = el("div", "et");
+    ttl.appendChild(el("span", "dot"));
+    ttl.appendChild(document.createTextNode(
+      live ? "已到 " + got + " 条 · 后面还在补" : "到这里是全部 " + got + " 条"
+    ));
+    card.appendChild(ttl);
+
+    card.appendChild(el("div", "es", web
+      ? "这条来自" + label(it.origin) + "，客户端里没有它的对话记录。要接着说，用网页版。"
+      : "面板只读，不能在这儿发消息。要接着说，回原会话 —— 历史和后续都在那边。"
+    ));
+
+    var acts = el("div", "ea");
+    if (web) {
+      var a1 = el("button", "primary", "在网页版继续 ↗");
+      a1.onclick = function () { continueWeb(it); };
+      acts.appendChild(a1);
+      var a2 = el("button", "ghost", "回客户端（可能为空）");
+      a2.onclick = function () { openSessionInClient(it.id, { force: true }); };
+      acts.appendChild(a2);
+    } else {
+      var b1 = el("button", "primary", "回融合会话继续");
+      b1.onclick = function () { openSessionInClient(it.id); };
+      acts.appendChild(b1);
+      var b2 = el("button", null, "在网页版打开 ↗");
+      b2.onclick = function () { continueWeb(it); };
+      acts.appendChild(b2);
+      var b3 = el("button", "ghost", "复制链接");
+      b3.title = "浏览器没弹出时，复制网页版地址手动打开";
+      b3.onclick = function () { copy(webUrl(it.id), "网页版链接已复制"); };
+      acts.appendChild(b3);
+    }
+    card.appendChild(acts);
+    return card;
+  }
+
   function cloudNote(shard) {
     var d = el("div", "snap cloud");
     d.appendChild(el("b", null, "云端最新"));
@@ -2738,12 +2649,11 @@
       (t ? t.abs + " · " : "") + label(it.origin) + " · " +
       (it.n ? it.n + " 条" : "正文未缓存");
     setFavLabel(isFav(id));
-    setComposer(id, false);
 
     /* 主按钮跟着来源走：小程序/App 来源指向网页版，别把人送进客户端的空壳 */
     var webOnly = webFirst(it.origin);
     var chatBtn = document.getElementById("dChat");
-    chatBtn.textContent = webOnly ? "网页版打开" : "回到会话";
+    chatBtn.textContent = webOnly ? "网页版继续" : "回融合会话";
     chatBtn.title = webOnly
       ? "这条来自" + label(it.origin) + "，客户端里没有正文；网页版能看到完整历史并接着聊"
       : "在客户端里打开这条会话本身（同一个 Session），接着在它里面聊";
@@ -2764,7 +2674,6 @@
       if (!got) {
         body.textContent = "";
         body.appendChild(uncachedCard(it, id));
-        setComposer(id, false);
         return;
       }
       /* 回放中会反复重绘，滚动位置得自己接住，否则每 300ms 跳回顶部 */
@@ -2778,10 +2687,10 @@
           : snapNote(it, id, got)
       );
       frag.appendChild(renderThread(shard, src === "live" ? null : jumpIdx));
+      frag.appendChild(endCard(it, got, src === "live"));
       body.textContent = "";
       body.appendChild(frag);
       if (src === "snap") maybeWarnSnapshot(it, id, got);
-      setComposer(id, true);
       var t = relTime(it.ts);
       document.getElementById("dSub").textContent =
         (t ? t.abs + " · " : "") + label(it.origin) + " · " + got + " 条" +
@@ -2894,7 +2803,6 @@
     document.getElementById("detailView").classList.remove("on");
     document.getElementById("findbar").classList.remove("on");
     document.getElementById("listView").classList.remove("off");
-    setComposer(null, false);
     state.current = null;
     state.view = "list";
     syncChrome();
@@ -3135,15 +3043,6 @@
   document.getElementById("dCopy").onclick = function () {
     if (state.current) copy(state.current.id, "已复制会话 ID");
   };
-  document.getElementById("fillOk").onclick = closeFillHint;
-  document.getElementById("fillCopy").onclick = function () {
-    if (!fillCtx) return;
-    copy(fillCtx, "已复制 " + fillCtx.length + " 字上下文，回对话页 Ctrl+V 即可");
-    closeFillHint();
-  };
-  document.getElementById("fillModal").onclick = function (ev) {
-    if (ev.target && ev.target.id === "fillModal") closeFillHint();
-  };
   document.getElementById("dFav").onclick = function () {
     if (!state.current) return;
     var added = toggleFav(state.current.id);
@@ -3166,17 +3065,28 @@
   };
 
   document.getElementById("dChat").onclick = function () {
-    if (!state.current) return;
-    /* 小程序/App 来源在客户端里没有正文，主按钮直接给能用的那个 */
-    if (webFirst(state.current.origin)) {
-      return openExternal(WEB + "/app/conversation/" + state.current.id);
-    }
-    openSessionInClient(state.current.id);
+    if (state.current) continueIn(state.current, this);
   };
   document.getElementById("dChatForce").onclick = function () {
     if (state.current) openSessionInClient(state.current.id, { force: true });
   };
-  document.getElementById("dFill").onclick = continueChat;
+
+  /* 面板是只读的：不在面板里发消息，也不再假装能替用户填输入框。
+     要继续对话只有两条路 —— 客户端的融合会话，或者网页版。 */
+  function continueIn(it, btn) {
+    if (!it) return;
+    if (btn) {
+      var old = btn.textContent;
+      btn.textContent = webFirst(it.origin) ? "正在交给浏览器…" : "正在切过去…";
+      btn.disabled = true;
+      setTimeout(function () { btn.textContent = old; btn.disabled = false; }, 1600);
+    }
+    if (webFirst(it.origin)) return openExternal(webUrl(it.id), "网页版");
+    openSessionInClient(it.id);
+  }
+  function continueWeb(it) {
+    if (it) openExternal(webUrl(it.id), "网页版");
+  }
 
   /* 小程序 / App 来源的会话：客户端里通常只有一条空壳（「暂无对话记录」），
    * 真正的历史只在云端。这类不给「回到会话」设陷阱，先问一句去哪儿。 */
@@ -3230,124 +3140,6 @@
     else b.textContent = on ? "★" : "☆";
   }
 
-  /* 草稿按会话存本地：回列表再点回来，刚才写的那句话还在 */
-  var DRAFTS = {};
-  try { DRAFTS = JSON.parse(localStorage.getItem("wbcs.drafts") || "{}") || {}; } catch (e) {}
-  var draftTimer = null;
-  function saveDraft(id, text) {
-    if (!id) return;
-    if (text) DRAFTS[id] = text; else delete DRAFTS[id];
-    clearTimeout(draftTimer);
-    draftTimer = setTimeout(flushDrafts, 500);
-  }
-  function flushDrafts() {
-    clearTimeout(draftTimer);
-    try { localStorage.setItem("wbcs.drafts", JSON.stringify(DRAFTS)); } catch (e) {}
-  }
-  window.addEventListener("pagehide", flushDrafts);
-  window.addEventListener("beforeunload", flushDrafts);
-
-  function setComposer(id, on) {
-    var c = document.getElementById("composer");
-    if (!c) return;
-    var show = !!(on && id);
-    var prev = c.dataset.id;
-    c.hidden = !show;
-    c.dataset.id = show ? id : "";
-    var db = document.getElementById("dBody");
-    if (db) db.classList.toggle("with-cmp", show);
-    var input = document.getElementById("cw");
-    if (!show) {
-      if (input) input.value = "";
-      hideCmpTip();
-      return;
-    }
-    /* 只在换会话时回填 + 收起确认条：流式重绘别动用户正在敲的内容 */
-    if (prev !== id) {
-      if (input) input.value = DRAFTS[id] || "";
-      hideCmpTip();
-    }
-  }
-
-  function showCmpTip(text, primaryLabel, onGo) {
-    var tip = document.getElementById("cmpTip");
-    document.getElementById("cmpTipText").textContent = text;
-    var go = document.getElementById("cmpGo");
-    go.textContent = primaryLabel;
-    go.onclick = function () { onGo(); };
-    tip.hidden = false;
-    tip.dataset.ready = "1";
-  }
-  function hideCmpTip() {
-    var tip = document.getElementById("cmpTip");
-    if (tip) { tip.hidden = true; tip.dataset.ready = ""; }
-  }
-
-  /**
-   * 底部输入条：回车不再「直接跳走」。
-   *
-   * v1.9 的做法是 openSessionInClient → 800ms 后 wb:message:fill，实际效果是
-   * 面板被切走、客户端输入框空的 —— 宿主把 fill 的内容推进了「新建会话草稿」，
-   * 而目标会话根本没收到，等于把用户写的话吞了。
-   *
-   * 现在改成两步，一步都不丢：
-   *   ① 回车：这句话先落草稿 + 进剪贴板，底下弹出确认条
-   *   ② 回车 / 点按钮：才真的切过去，并提示「Ctrl+V 粘一下」
-   */
-  function prepareSend() {
-    var c = document.getElementById("composer");
-    var id = c && c.dataset.id;
-    if (!id) return;
-    var input = document.getElementById("cw");
-    var text = (input.value || "").trim();
-    if (!text) { input.focus(); toast("先写一句要接着说的话"); return; }
-
-    var item = DATA.items.find(function (x) { return x.id === id; }) || { id: id, origin: "" };
-    saveDraft(id, text);
-    flushDrafts();   // 下一步就可能切走面板，草稿要立刻落盘
-
-    function go() {
-      if (webFirst(item.origin)) {
-        openExternal(WEB + "/app/conversation/" + id);
-        toast("已复制这句 · 网页版输入框里 Ctrl+V", 3200);
-        return;
-      }
-      openSessionInClient(id);
-      toast("已复制这句 · 到原会话输入框 Ctrl+V", 3200);
-    }
-
-    copyText(text).then(function (ok) {
-      showCmpTip(
-        (ok ? "已复制 " : "复制失败，请手动选中复制：") + text.length + " 字" +
-          (ok ? " · 再按一次 Enter 打开原会话，过去 Ctrl+V 粘上（草稿已留）" : ""),
-        webFirst(item.origin) ? "网页版打开" : "打开原会话",
-        go
-      );
-      /* 焦点留在输入框：用户可能还想接着改字，别把光标抢到按钮上 */
-      input.focus();
-    });
-  }
-  document.getElementById("cSend").onclick = prepareSend;
-  document.getElementById("cmpBack").onclick = function () {
-    hideCmpTip();
-    document.getElementById("cw").focus();
-  };
-  document.getElementById("cw").addEventListener("input", function (ev) {
-    var c = document.getElementById("composer");
-    var id = c && c.dataset.id;
-    if (id) saveDraft(id, ev.target.value.trim());
-    hideCmpTip();
-  });
-  document.getElementById("cw").addEventListener("keydown", function (ev) {
-    if (ev.key !== "Enter" || ev.isComposing) return;
-    ev.preventDefault();
-    var tip = document.getElementById("cmpTip");
-    if (tip && !tip.hidden && tip.dataset.ready === "1") {
-      document.getElementById("cmpGo").click();
-      return;
-    }
-    prepareSend();
-  });
 
   // 会话内查找
   function openFind() {
@@ -3389,8 +3181,6 @@
       if (sm && !sm.hidden) { sm.hidden = true; return; }
       var dm2 = document.getElementById("dMenu");
       if (dm2 && !dm2.hidden) { closeMenu(); return; }
-      var fm = document.getElementById("fillModal");
-      if (fm && !fm.hidden) { closeFillHint(); return; }
       if (state.view === "detail" || state.view === "stats") closeDetail();
       return;
     }

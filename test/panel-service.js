@@ -48,6 +48,15 @@ async function main() {
 
   const browser = await chromium.launch({ channel: "msedge", headless: true });
   const page = await browser.newPage();
+  /* 记录面板发起的 window.open：宿主会把它接走交系统浏览器，这里只验证"有没有发起" */
+  await page.addInitScript(() => {
+    window.__OPENS = [];
+    const orig = window.open;
+    window.open = function (u, n, f) {
+      window.__OPENS.push(String(u));
+      try { return orig.call(window, u, n, f); } catch (e) { return null; }
+    };
+  });
   /* 底部输入条会写剪贴板，断言要能读回来 */
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   const calls = [];
@@ -97,7 +106,7 @@ async function main() {
         fallbackToken: "tok-" + method,
         fallbackExpiresAt: Date.now() + 300000,
         methods: ["ping", "fetchBody", "status", "inspect"],
-        version: "1.9.1",
+        version: PKG_VERSION,
       };
     }
     if (channel === "wb:extensions:$invokeLocalRpcFallback") {
@@ -163,23 +172,28 @@ async function main() {
   assert.ok(/云端最新/.test(sub), "副标题没标云端最新：" + sub);
   console.log("✓ 副标题：" + sub.trim());
 
-  /* 底部输入条：回车必须「先复制 + 留草稿」，不许直接跳走。
-   * v1.9 的回归就是这个 —— 一跳过去输入框空的，用户以为文字被吞了。 */
-  const hashBefore = await fr.locator("#composer").evaluate(() => location.hash);
-  await fr.locator("#cw").fill("顺便帮我核一下这个结论");
-  await fr.locator("#cw").press("Enter");
-  await fr.locator("#cmpTip:not([hidden])").waitFor({ timeout: 5000 });
-  const tip = await fr.locator("#cmpTipText").textContent();
-  const hashAfter = await fr.locator("#composer").evaluate(() => location.hash);
-  assert.strictEqual(hashAfter, hashBefore, "第一次回车不该离开面板");
-  assert.ok(/已复制/.test(tip), "确认条要说明已经复制：" + tip);
-  const draft = await fr.locator("#composer").evaluate(() => {
-    try { return (JSON.parse(localStorage.getItem("wbcs.drafts") || "{}"))[document.getElementById("composer").dataset.id] || ""; } catch (e) { return ""; }
-  });
-  assert.strictEqual(draft, "顺便帮我核一下这个结论", "这句话必须落成本地草稿，不能被吞掉");
-  const clip = await page.evaluate(() => navigator.clipboard.readText().catch(() => ""));
-  assert.strictEqual(clip, "顺便帮我核一下这个结论", "回车时要先把这句话放进剪贴板");
-  console.log("✓ 回车 → 复制 + 草稿 + 确认条（没跳走）");
+  /* 面板只读：v1.11 把「在面板里打字」整个拿掉了 —— 跳过去填不进原会话，
+   * 等于把用户写的话吞掉。宁可没有输入框，也不能骗人。 */
+  assert.strictEqual(await fr.locator("#composer").count(), 0, "面板不该再有输入条");
+  assert.strictEqual(await fr.locator("#cw").count(), 0, "面板不该再有输入框");
+
+  const ec = fr.locator("#dBody .endcard").last();
+  await ec.waitFor({ timeout: 5000 });
+  const ecTxt = await ec.textContent();
+  assert.ok(/面板只读/.test(ecTxt), "结束卡要说明面板只读：" + ecTxt);
+  assert.ok(/到这里是全部 4 条/.test(ecTxt), "结束卡要显示条数：" + ecTxt);
+  assert.ok(/在网页版打开/.test(ecTxt), "要有网页版出口：" + ecTxt);
+  const ecPrimary = (await ec.locator("button.primary").textContent()).trim();
+  assert.strictEqual(ecPrimary, "回融合会话继续", "桌面来源主按钮应指向融合会话，实际：" + ecPrimary);
+  console.log("✓ 只读面板：没有输入框，末尾给两条出口（" + ecPrimary + " / 在网页版打开）");
+
+  /* 网页版出口必须真的发起打开（宿主只放行 https，这里盯 window.open） */
+  await ec.getByText("在网页版打开").click();
+  await page.waitForTimeout(300);
+  const opens = await fr.locator("#dBody").evaluate(() => (window.__OPENS || []).slice());
+  assert.ok(opens.some((u) => /^https:\/\/www\.workbuddy\.cn\/app\/conversation\//.test(u)),
+    "点网页版没发起打开：" + JSON.stringify(opens));
+  console.log("✓ 网页版出口 → window.open(" + opens[opens.length - 1] + ")");
 
   /* 小程序来源的会话：「回到会话」不许直接跳进客户端的空壳，必须先给选择。 */
   await fr.locator("#back").click();     // 回到列表
@@ -193,6 +207,19 @@ async function main() {
   assert.ok(/网页版/.test(pickB), "默认动作应该是网页版：" + pickB);
   console.log("✓ 小程序来源 → 先问去哪儿（" + pickB.trim() + "）");
   await fr.locator("#pickX").click();
+
+  /* 小程序来源的详情页：客户端里只有空壳，出口要直接指向网页版 */
+  await mpRow.locator(".body").click();
+  const ecMp = fr.locator("#dBody .endcard").last();
+  await ecMp.waitFor({ timeout: 45000 });
+  const ecMpTxt = await ecMp.textContent();
+  const ecMpPrimary = (await ecMp.locator("button.primary").textContent()).trim();
+  assert.strictEqual(ecMpPrimary, "在网页版继续 ↗", "小程序来源主按钮应是网页版，实际：" + ecMpPrimary);
+  assert.ok(/客户端里没有它的对话记录/.test(ecMpTxt), "要说明客户端里是空的：" + ecMpTxt);
+  const dChatMp = (await fr.locator("#dChat").textContent()).trim();
+  assert.strictEqual(dChatMp, "网页版继续", "顶栏主按钮也要跟着来源走，实际：" + dChatMp);
+  console.log("✓ 小程序来源详情页 → 主出口是网页版（" + dChatMp + "）");
+  await fr.locator("#back").click();
 
   console.log("通道调用：" + [...new Set(calls)].join(" · "));
   assert.ok(calls.includes("wb:extensions:$resolveLocalRpc"));

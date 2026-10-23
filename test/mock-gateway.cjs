@@ -31,7 +31,10 @@ function startGateway() {
     const url = new URL(req.url, "http://127.0.0.1");
     if (url.pathname.startsWith("/console/as/conversations/")) {
       const id = decodeURIComponent(url.pathname.split("/")[4] || "");
-      if (id !== SESSION_ID) {
+      /* 真实网关对「云端有正文的会话」都会给票据，不区分来源；
+         假网关照此实现，这样小程序来源的会话也能测到详情页。
+         只有显式的 `nope` 用来测「云端没有这条」的失败路径。 */
+      if (!id || id === "nope") {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ code: 404, msg: "not found", data: null }));
         return;

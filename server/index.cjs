@@ -24,7 +24,7 @@ const { loadSession, warmup } = require("./acp.cjs");
 const { parseEvents } = require("./parse.cjs");
 
 /** 与 package.json 保持一致（CI 会比对；部署目录里没有 package.json，只能写死） */
-const VERSION = "1.10.0";
+const VERSION = "1.11.0";
 const WEB = "https://www.workbuddy.cn";
 
 /** 正文缓存：重开同一条会话不再重新回放 */

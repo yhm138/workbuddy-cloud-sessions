@@ -2191,9 +2191,16 @@
         body.appendChild(renderThread(s, null));
         return;
       }
-      log("shard", "ok " + (shard.messages || []).length + " msgs");
+      var got = (shard.messages || []).length;
+      log("shard", "ok " + got + " msgs");
       body.textContent = "";
-      if ((shard.messages || []).length) body.appendChild(snapNote(it, id, shard.messages.length));
+      if (!got) {
+        /* 读到空分片：别留白屏，直接给回原会话的入口 */
+        body.appendChild(uncachedCard(it, id));
+        setComposer(id, false);
+        return;
+      }
+      body.appendChild(snapNote(it, id, got));
       body.appendChild(renderThread(shard, jumpIdx));
       setComposer(id, (shard.messages || []).length > 0);
       if (findQ && findQ.length >= 1) {

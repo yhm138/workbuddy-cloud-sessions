@@ -27,6 +27,7 @@ const fs = require("fs");
 const path = require("path");
 const https = require("https");
 const crypto = require("crypto");
+const { pack: packZip } = require("./zip.cjs");
 const { execFileSync } = require("child_process");
 
 const ROOT = path.resolve(__dirname, "..");
@@ -174,6 +175,16 @@ async function ensureNodeExe(runtimeDir) {
 
 /* ------------------------------ 打包 ------------------------------ */
 
+/**
+ * 给文件名含非 ASCII 的条目补上 UTF-8 标志位（通用标志 bit 11）。
+ *
+ * 为什么不用 `zip -UN=UTF8`：Info-ZIP 3.0 会把中央目录偏移写错 6 字节，
+ * unzip 能纠错、Python / 7-Zip 直接报 "Bad magic number for central directory"。
+ * 自己补标志位不动任何偏移，两个世界都正常。
+ *
+ * @returns {number} 改了多少条
+ */
+
 async function main() {
   log(`\n打包 workbuddy-cloud-sessions v${VERSION}（Windows x64 便携版）\n`);
 
@@ -245,17 +256,20 @@ async function main() {
   const rawSize = dirSize(STAGE);
   log(`· 解包后 ${MB(rawSize)}`);
 
-  // 7. 压缩（-UN=UTF8 保证中文文件名在 Windows 资源管理器里能正常解出）
+  // 7. 压缩
+  //
+  // 自己写 zip，不用系统 `zip`：Info-ZIP 3.0 的 -UN=UTF8 会把中央目录偏移写错 6 字节
+  // （unzip 能纠错、Python / 7-Zip 直接 "Bad magic number"），不加 -UN 又会把中文名
+  // 写成 GBK。tools/zip.cjs 统一用 UTF-8 + bit 11，两边都不会出问题。
   if (fs.existsSync(OUT_ZIP)) fs.rmSync(OUT_ZIP);
   log(`· 压缩 …`);
+  let packed;
   try {
-    execFileSync("zip", ["-r", "-q", "-UN=UTF8", OUT_ZIP, PKG_NAME], {
-      cwd: DIST,
-      stdio: "pipe",
-    });
+    packed = packZip(STAGE, OUT_ZIP, PKG_NAME, { level: 6 });
   } catch (e) {
-    throw new Error(`压缩失败（需要 zip 命令，Info-ZIP 3.0+）：${String(e.message).split("\n")[0]}`);
+    throw new Error(`压缩失败：${String(e.message).split("\n")[0]}`);
   }
+  log(`· ${packed.files} 个文件 → ${MB(packed.outBytes)}`);
 
   const zipSize = fs.statSync(OUT_ZIP).size;
   const sha = crypto.createHash("sha256").update(fs.readFileSync(OUT_ZIP)).digest("hex");

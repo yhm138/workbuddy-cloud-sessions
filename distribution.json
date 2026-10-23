@@ -1,7 +1,7 @@
 {
   "$schema": "https://schemas.workbuddy.ai/extension-distribution.v1.json",
   "extensionId": "cloud-sessions",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "kind": "builtin",
   "grantedPermissions": [
     "*"

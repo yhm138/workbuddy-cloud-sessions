@@ -1,0 +1,88 @@
+name: 问题反馈
+description: 面板、直连、抓取出了问题
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先看 [排障手册](https://github.com/yhm138/workbuddy-cloud-sessions/blob/main/docs/TROUBLESHOOTING.md)，
+        里面按「症状 → 原因 → 处理」列了常见情况，多数问题在那里就能解决。
+
+        **请不要贴会话正文。** 只需要会话 id 和条数。
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 你期望什么、实际看到了什么
+      placeholder: 点开某条会话，正文区一直是「正在从云端拉取正文…」，等了 30 秒也没出来。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开侧栏「云端会话」
+        2. 点第一条
+        3. 看到 …
+    validations:
+      required: true
+
+  - type: textarea
+    id: diag
+    attributes:
+      label: 数据与诊断
+      description: 面板拉到页脚 → 展开「数据与诊断」→ 全选复制，贴在这里
+      render: text
+      placeholder: |
+        页面版本  : 1.11.1
+        扩展版本  : 1.11.1
+        宿主通道  : MessagePort · ready
+        云端直连  : service v1.11.1 · pid 1234 · 0 条缓存 · via port
+    validations:
+      required: true
+
+  - type: input
+    id: client
+    attributes:
+      label: 客户端版本
+      description: WorkBuddy 桌面端版本号（设置 / 关于）
+      placeholder: "例如 5.9.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 系统
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及哪一块
+      options:
+        - 面板加载不出来 / 插件加载失败
+        - 云端直连（service）
+        - 抓取正文（CLI / 安装向导）
+        - 搜索、导出、收藏
+        - 继续对话 / 深链跳转
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 截图或补充
+      description: 截图请确认不含真实会话内容，或先用示例数据复现
+    validations:
+      required: false

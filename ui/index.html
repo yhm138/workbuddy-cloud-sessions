@@ -769,7 +769,7 @@
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.11.0";
+  var PAGE_VERSION = "1.11.1";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -2272,20 +2272,26 @@
    * 原会话（宿主的 fill 只往「新建草稿」里塞），等于把话说丢了 —— 与其假装能
    * 输入，不如把「回哪儿说」讲清楚。
    */
-  function endCard(it, got, live) {
+  function endCard(it, got, src) {
     var web = webFirst(it.origin);
+    var live = src === "live";
     var card = el("div", "endcard");
 
     var ttl = el("div", "et");
     ttl.appendChild(el("span", "dot"));
+    /* 三种来源三种说法：绝不能让「本机快照」看起来像「全部」 */
     ttl.appendChild(document.createTextNode(
-      live ? "已到 " + got + " 条 · 后面还在补" : "到这里是全部 " + got + " 条"
+      live ? "已到 " + got + " 条 · 后面还在补"
+        : src === "cloud" ? "到这里是全部 " + got + " 条"
+        : "这是本机快照里的 " + got + " 条"
     ));
     card.appendChild(ttl);
 
     card.appendChild(el("div", "es", web
       ? "这条来自" + label(it.origin) + "，客户端里没有它的对话记录。要接着说，用网页版。"
-      : "面板只读，不能在这儿发消息。要接着说，回原会话 —— 历史和后续都在那边。"
+      : src === "snap"
+        ? "快照可能不是最新。要看全文，从右上 ⋯ 拉一次云端；要接着说，回原会话 —— 历史和后续都在那边。"
+        : "面板只读，不能在这儿发消息。要接着说，回原会话 —— 历史和后续都在那边。"
     ));
 
     var acts = el("div", "ea");
@@ -2687,7 +2693,7 @@
           : snapNote(it, id, got)
       );
       frag.appendChild(renderThread(shard, src === "live" ? null : jumpIdx));
-      frag.appendChild(endCard(it, got, src === "live"));
+      frag.appendChild(endCard(it, got, src));
       body.textContent = "";
       body.appendChild(frag);
       if (src === "snap") maybeWarnSnapshot(it, id, got);
@@ -3232,9 +3238,13 @@
       out.push("宿主通道  : " + (g && g.port
         ? ("MessagePort" + (g.ready ? "（ready 已确认）" : "（ready 未确认）"))
         : "未建立（只剩浏览器兜底）"));
-      var si = SB.info();
+      /* 探活可能还没回来（或先被一次 fetchBody 置成 ok），info 为空时不能直接点属性 */
+      var si = SB.info() || {};
       out.push("云端直连  : " + (SB.state() === "ok"
-        ? ("service v" + si.version + " · pid " + si.pid + " · " + si.cache + " 条缓存 · via " + SB.style())
+        ? ("service v" + (si.version || "?") +
+          (si.pid ? " · pid " + si.pid : "") +
+          (si.cache != null ? " · " + si.cache + " 条缓存" : "") +
+          " · via " + SB.style())
         : SB.state() === "off" ? ("不可用 —— " + SB.error()) : "检测中…"));
       var lf = typeof SB.last === "function" ? SB.last() : null;
       if (lf) {

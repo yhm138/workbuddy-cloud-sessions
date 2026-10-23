@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 排障手册
+    url: https://github.com/yhm138/workbuddy-cloud-sessions/blob/main/docs/TROUBLESHOOTING.md
+    about: 面板加载失败、直连不可用、点开是空的 —— 先按症状查这里
+  - name: 协议与机制
+    url: https://github.com/yhm138/workbuddy-cloud-sessions/blob/main/docs/PROTOCOL.md
+    about: 想知道字段、时序、宿主通道怎么工作
+  - name: 下载与安装
+    url: https://github.com/yhm138/workbuddy-cloud-sessions/releases/latest
+    about: 最新安装包与历史版本

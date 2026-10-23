@@ -1,0 +1,40 @@
+name: 想法 / 需求
+description: 想要一个新能力，或者觉得某处应该改
+title: "[idea] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提之前先确认一下边界：**面板是只读的浏览层，不会再长出输入框。**
+        原因写在 [README 的「只读边界」](https://github.com/yhm138/workbuddy-cloud-sessions#只读边界这条要提前讲清楚) —— 宿主的填字通道没有「目标会话」这个概念，硬做只会把用户的话弄丢。
+
+  - type: textarea
+    id: pain
+    attributes:
+      label: 你卡在哪
+      description: 描述场景，不要直接给方案，这样更容易找到更好的解法
+      placeholder: 我有 200 多条云端会话，想按项目分组看，现在只能按来源分。
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: 你想到的做法
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及哪一块
+      options:
+        - 浏览 / 搜索 / 排序
+        - 导出
+        - 云端直连
+        - 安装与更新
+        - 文档
+        - 其他
+    validations:
+      required: true

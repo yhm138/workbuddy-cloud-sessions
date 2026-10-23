@@ -1,7 +1,7 @@
 {
   "id": "cloud-sessions",
   "name": "云端会话",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "description": "把网页版 / 微信小程序 / 定时任务产生的云端历史会话搬进桌面端侧栏：正文、全文搜索、Markdown 导出。",
   "ui": {
     "onLoadError": {

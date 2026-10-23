@@ -23,6 +23,9 @@ const T0 = Date.UTC(2026, 9, 23, 1, 40, 0); // 2026-10-23 09:40 +08:00
 const H = 3600e3;
 const D = 24 * H;
 
+/** writeDemo 里挑出来的那条详情会话，供假 service 返回 */
+let DETAIL_REC = null;
+
 /** 会话列表：字段与 wbcs build 生成的 data.js 完全一致 */
 const ITEMS = [
   { id: "1000000000000000001", title: "为团队整理一份 API 设计评审清单", origin: "agents", ts: T0 - 2 * H, created: T0 - 5 * H, status: "completed", n: 24, t: 6, ok: true },
@@ -50,6 +53,15 @@ function writeDemo(dir) {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(path.join(dir, "full"), { recursive: true });
   fs.copyFileSync(path.join(ROOT, "ui/index.html"), path.join(dir, "index.html"));
+
+  /* 假宿主壳：把面板放进 iframe，和真实客户端一致（顶层面板会走另一条降级路径） */
+  fs.writeFileSync(
+    path.join(dir, "host.html"),
+    '<!doctype html><meta charset="utf-8"><title>panel</title>\n' +
+      "<style>html,body{margin:0;padding:0;height:100%;background:#fff;overflow:hidden}" +
+      "iframe{border:0;display:block;width:100%;height:100%}</style>\n" +
+      '<iframe id="f" src="./index.html"></iframe>\n'
+  );
 
   const counts = {};
   for (const it of ITEMS) counts[it.origin] = (counts[it.origin] || 0) + 1;
@@ -95,7 +107,13 @@ function writeDemo(dir) {
       thought: messages.filter((m) => m[0] === "h").length,
       tool: messages.filter((m) => m[0] === "t").length,
     };
-    const rec = { id: it.id, title: it.title, origin: it.origin, ok: true, error: "", count: messages.length, stats, messages };
+    const rec = {
+      id: it.id, title: it.title, origin: it.origin, ok: true, error: "",
+      count: messages.length, stats, messages,
+      /* 下面三个字段让「云端最新」提示条能显示成真实的样子 */
+      fetchedAt: T0, events: it.id === ITEMS[0].id ? 142 : 9, source: "acp",
+    };
+    if (it.id === ITEMS[0].id) DETAIL_REC = rec;
     fs.writeFileSync(
       path.join(dir, "full", it.id + ".js"),
       "window.__WBCS_SESSION__(" + JSON.stringify(rec) + ");\n"
@@ -124,41 +142,126 @@ async function shots(dir) {
     }
   };
   const browser = await launch();
-  const url = "file:///" + path.join(dir, "index.html").replace(/\\/g, "/");
+  /* 面板跑在 iframe 里才是真实形态：只有 iframe 会等宿主投递 MessagePort，
+     顶层的 file:// 页面会被当成纯浏览器环境直接降级。 */
+  const hostUrl = "file:///" + path.join(dir, "host.html").replace(/\\/g, "/");
   fs.mkdirSync(OUT, { recursive: true });
 
-  const open = async () => {
+  /**
+   * 假 service：让详情截图呈现「云端最新」的真实样子，而不是降级后的快照。
+   * 走真实通道 —— 先给页面塞一个 MessagePort（宿主就这么干的），再在另一头应答。
+   */
+  const FAKE_SERVICE = (arg) => {
+    const rec = arg.rec;
+    const V = arg.version;
+    try {
+      // 让「进面板预取」跳过其它会话，截图里就不会闪进度条
+      const fail = {};
+      for (const id of arg.others) fail[id] = Date.now();
+      localStorage.setItem("wbcs.pullFail", JSON.stringify(fail));
+    } catch (e) {}
+
+    const reply = (port, requestId, result) =>
+      port.postMessage({ type: "wb:invoke:response", requestId, result });
+
+    const answer = (port, d) => {
+      const a = d.args || [];
+      if (d.channel === "wb:boundary:guest-ready") return reply(port, d.requestId, { ok: true });
+      if (d.channel === "wb:extensions:$resolveLocalRpc") {
+        return reply(port, d.requestId, {
+          extensionId: "cloud-sessions",
+          fallbackToken: "demo-token",
+          fallbackExpiresAt: Date.now() + 300000,
+          methods: ["ping", "status", "inspect", "fetchBody", "peek", "warm", "clear"],
+          version: V,
+          serviceInstanceId: "demo",
+        });
+      }
+      if (d.channel === "wb:extensions:$invokeLocalRpcFallback") {
+        const method = a[1];
+        const payload = a[2] || {};
+        if (method === "ping") {
+          return reply(port, d.requestId, { ok: true, version: V, pid: 24380, uptime: 913, ports: [], cache: 1 });
+        }
+        if (method === "status") {
+          return reply(port, d.requestId, { ok: true, version: V, pid: 24380, cache: [rec.id], inflight: [], active: 0, waiting: 0, calls: [] });
+        }
+        if (method === "peek") {
+          return reply(port, d.requestId, { ok: true, live: false, n: rec.messages.length, messages: rec.messages, events: rec.events });
+        }
+        if (method === "fetchBody") {
+          return reply(port, d.requestId, payload.id === rec.id
+            ? { ok: true, cached: false, elapsed: 120, shard: rec }
+            : { ok: true, cached: false, elapsed: 60, shard: { id: payload.id, ok: true, messages: [], stats: {} } });
+        }
+      }
+      return reply(port, d.requestId, { ok: true });
+    };
+
+    const boot = () => {
+      /* 宿主给 iframe 投递 MessagePort 就是这么做的；这里只是把另一头留在本进程里应答 */
+      const ch = new MessageChannel();
+      ch.port1.addEventListener("message", (ev) => {
+        const d = ev.data;
+        if (!d || d.type !== "wb:invoke:request") return;
+        answer(ch.port1, d);
+      });
+      try { ch.port1.start(); } catch (e) {}
+      window.postMessage({ type: "__wb_port_init__", readyToken: "demo" }, "*", [ch.port2]);
+    };
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", () => setTimeout(boot, 0));
+    } else {
+      setTimeout(boot, 0);
+    }
+  };
+
+  const open = async (withService) => {
     const page = await browser.newPage({ viewport: { width: 400, height: 840 }, deviceScaleFactor: 2 });
     const errs = [];
     page.on("pageerror", (e) => errs.push(String(e)));
-    await page.goto(url);
-    await page.waitForTimeout(1200);
+    if (withService) {
+      const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+      await page.addInitScript(FAKE_SERVICE, {
+        rec: DETAIL_REC,
+        version: pkg.version,
+        others: ITEMS.filter((x) => x.id !== DETAIL_REC.id).map((x) => x.id),
+      });
+    }
+    await page.goto(hostUrl);
+    /* 没有 service 的页面要等面板把「等宿主 port」的 4s 熬完 */
+    await page.waitForTimeout(withService ? 1800 : 5200);
     page.__errs = errs;
-    return page;
+    const fr = page.frameLocator("#f");
+    await fr.locator("#listView, #detailView").first().waitFor({ timeout: 15000 });
+    return { page, fr };
   };
 
   // 1) 列表
-  let p = await open();
-  await p.evaluate(() => localStorage.setItem("wbcs.theme", "light"));
-  await p.waitForTimeout(200);
+  let { page: p, fr } = await open();
   await p.screenshot({ path: path.join(OUT, "list.png") });
   await p.close();
 
-  // 2) 详情（先关掉快照弹窗）
-  p = await open();
-  await p.click('[data-id="' + ITEMS[0].id + '"]');
+  // 2) 快照降级弹窗（故意不装 service）
+  ({ page: p, fr } = await open());
+  await fr.locator('.row[data-id="' + ITEMS[0].id + '"]').click();
   await p.waitForTimeout(1400);
   await p.screenshot({ path: path.join(OUT, "modal.png") });
-  await p.click("#snapClose");
-  await p.waitForTimeout(400);
+  await p.close();
+
+  // 3) 详情（假 service → 「云端最新」）
+  ({ page: p, fr } = await open(true));
+  await fr.locator('.row[data-id="' + ITEMS[0].id + '"]').click();
+  await p.waitForTimeout(1600);
   await p.screenshot({ path: path.join(OUT, "detail.png") });
   await p.close();
 
-  // 3) 统计
-  p = await open();
-  await p.click("#listMore");
+  // 4) 统计
+  ({ page: p, fr } = await open());
+  await fr.locator("#listMore").click();
   await p.waitForTimeout(200);
-  await p.click("#statsBtn");
+  await fr.locator("#statsBtn").click();
   await p.waitForTimeout(600);
   await p.screenshot({ path: path.join(OUT, "stats.png") });
   await p.close();

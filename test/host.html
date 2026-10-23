@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>假宿主 · 云端会话面板自测</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #ececec; }
+  iframe { width: 390px; height: 860px; border: 0; background: #fff; display: block; }
+</style>
+</head>
+<body>
+<!--
+  自测用的「假宿主」：只实现真实宿主里我们用到的那几条通道
+    wb:boundary:guest-ready / wb:config:get / wb:http:get
+    wb:extensions:$resolveLocalRpc / $invokeLocalRpcFallback
+  调用会被转到 Node 侧（page.exposeFunction('hostInvoke')），
+  那边接的是真的 server/index.cjs + 假网关。
+-->
+<iframe id="f" src="/ui/index.html"></iframe>
+<script>
+  var f = document.getElementById("f");
+  var port = null;
+
+  function boot() {
+    if (port) return;
+    var ch = new MessageChannel();
+    port = ch.port1;
+    port.onmessage = function (ev) {
+      var d = ev.data || {};
+      if (d.type !== "wb:invoke:request") return;
+      Promise.resolve(window.hostInvoke(d.channel, d.args || [])).then(
+        function (result) {
+          port.postMessage({ type: "wb:invoke:response", requestId: d.requestId, result: result });
+        },
+        function (e) {
+          port.postMessage({
+            type: "wb:invoke:response",
+            requestId: d.requestId,
+            error: { message: String((e && e.message) || e), code: (e && e.code) || "HOST_ERROR" }
+          });
+        }
+      );
+    };
+    f.contentWindow.postMessage({ type: "__wb_port_init__", readyToken: "test" }, "*", [ch.port2]);
+  }
+
+  f.addEventListener("load", function () { setTimeout(boot, 30); });
+  setTimeout(function () { if (!port) boot(); }, 3000);
+</script>
+</body>
+</html>

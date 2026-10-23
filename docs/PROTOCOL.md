@@ -701,16 +701,110 @@ onload 判断。用三个信号，汇到同一个 60 秒节流的 `autoSync()`�
 "processPolicy": { "server": "fork", "renderer": "iframe" }
 ```
 
-代价是必须重启客户端才能验证 fork 是否成功，属于下一版的事。
+代价是必须重启客户端才能验证 fork 是否成功。**v1.9.0 已经做了，见 6.9。**
+
+## 6.9 扩展内 service：让面板直接回放云端（v1.9.0）
+
+### 为什么非得是 service
+
+- iframe 里 `fetch()` 打 ACP 网关会被 CORS 拦死：网关既不回 `access-control-allow-origin`，
+  也不 expose `acp-connection-id`，连 `initialize` 都发不出去
+- `wb:http:*` 是请求/响应，而历史是从 **SSE 长连接**里回放的，拿不到流
+- 所以只能有一个真 Node 进程：`https` 建 SSE 不受 CORS 管，`wb.http.get` 借宿主 cookie 换票据
+
+### 清单
+
+```json
+// extension.json
+"service": { "entry": "./server/index.cjs", "process": "fork" }
+// distribution.json
+"processPolicy": { "server": "fork", "renderer": "iframe" }
+```
+
+### 服务端契约
+
+- 宿主 fork 子进程（注入 `main/preload/fork-preload.cjs`），然后调模块导出的 `activate(wb)`
+- `activate` 返回 `{ methods, dispose }`；`methods` 是 `name -> async (payload, ctx) => result`
+- 方法名有约束：不能含 `/`、不能以 `wb:internal:` 开头、长度 ≤ 128
+  （`isExtensionLocalRpcMethodName` / `assertPublicExtensionMethod`）；宿主内部按
+  `` `${extensionId}/${method}` `` 存白名单
+- 返回值必须能被**结构化克隆**：只放数组 / 字符串 / 数字，别塞函数、Map、Buffer
+- `wb.http.get(url, { headers })` 会带宿主自己的 cookie 和 bearer，返回体常被 `{code,msg,data}`
+  包一层，得先拆
+
+### 面板侧：两跳
+
+```js
+// ① 换票据（幂等，多要一张也无所谓）
+wb:extensions:$resolveLocalRpc(extensionId, method)
+// → { extensionId, protocolVersion: 2, serviceInstanceId, runtimeGeneration, methods[],
+//     ticket, fallbackToken, fallbackExpiresAt }
+
+// ② 调用
+wb:extensions:$invokeLocalRpcFallback(extensionId, method, payload, fallbackToken)
+```
+
+`fallbackToken` 是 UUID，**有效期 5 分钟**。宿主的实际分发代码（`app.asar` 里那个
+`ae = new Map([[Ga,…],[Ka,…],[qa,…]])`）：
+
+```js
+[qa, async (ctx, extId, method, payload, token) => {
+  if (typeof extId !== "string" || typeof method !== "string" || typeof token !== "string")
+    throw Object.assign(Error("…"), { code: "INVALID_ARGUMENT" });
+  const access = resolveLocalRpcAccess(ctx?.subject, extId);   // ← 由宿主推断，伪造不了
+  if (!access) throw Object.assign(Error("…"), { code: "PERMISSION_DENIED" });
+  return registry.invokeLocalRpcFallback(extId, method, payload, access, token);
+}]
+```
+
+所以 `fallbackToken` 只证明「这张票是发给这个 iframe 的」，真正的授权靠
+`ctx.subject`（self-guest 必须挂在这个扩展的 iframe 上）。
+
+失败码：`PERMISSION_DENIED`（票不对/调用方不匹配）、`EXTENSION_CONTEXT_STALE`
+（service 被回收后重建，`runtimeGeneration` 变了）、`EXTENSION_LOCAL_RPC_BUSY`、
+`INVALID_ARGUMENT`。面板要能自愈：清票 → 重新 resolve → 再调用一次。
+
+### 通道怎么走
+
+两条都能到，先探测再钉住（`localStorage` 的 `wbcs.sbStyle`）：
+
+- MessagePort：`Bridge.invoke(channel, args, timeout)`，就是 guest-ready 握手那条
+- IPC：`window.__wbInvoke(channel, null, ...args)`（第二个参数会被宿主当 subject 剥掉）
+
+### 踩过的坑
+
+1. 网关回的 `link` 常是 `http://`，但 ACP 只认 `https`；**只升级 `*.workbuddy.cn`**，
+   别把本地假网关（`http://127.0.0.1`）也改掉，否则自测跑不起来
+2. 并发别贪：网关对并发敏感，2 条是实测稳的值，3 条以上容易 `no_token_401` 或连接被掐
+3. 单条回放：空闲 4s 收尾、硬超时 60s；一次最多回 6000 条消息（IPC 塞太大会断）
+4. 缓存 24 条、TTL 3 分钟，够覆盖「来回点几条」又不至于吃内存
+5. 服务被 idle evict 是常态，不是错误 —— 票据过期 + 上下文失效两条路都要能恢复
+
+### 没有客户端时怎么验证
+
+```bash
+node test/service-acp.js     # 假网关 + 直接调 activate，覆盖票据/回放/缓存/失败分支
+node test/panel-service.js   # Playwright 起假宿主（test/host.html），把两条通道接到同一份
+                             # service 上，断言面板真从「云端」拿到正文
+NO_SERVICE=1 node test/panel-service.js   # 降级路径：必须退回快照模式，不许白屏
+```
+
+假宿主要照抄宿主的两条约定：`$resolveLocalRpc` 返回 `fallbackToken/fallbackExpiresAt`，
+`$invokeLocalRpcFallback` 收 `(extId, method, payload, token)` 四个参数、就是这个顺序。
+顺序错了不会告诉你「参数错了」，只会先撞 `INVALID_ARGUMENT`（第 4 个参数本该是票据字符串，
+结果收到的是 payload 对象），或者一路 `PERMISSION_DENIED`。所以假宿主里要显式 `assert`
+一下 token 的形状，让错误尽早暴露在测试里。
 
 ## 7. 已知限制
 
-- **cloud 会话的正文，面板永远只能看到快照**（详见 6.4 ④）。所谓「拉最新」在面板内不存在，
-  唯一可靠的方式是 `workbuddy://chat/<id>` 回到客户端 —— 那边才是走云端 ACP 全量回放的
-- 正文默认是**抓取时的快照**；快照靠 `wbcs fetch` 增量补，或客户端自己打开该会话时由宿主落下
+- **service 不可用时，面板退回快照**（6.4 ④、6.9）：正文顶部会标「本机快照 · 可能不是最新」。
+  这时「最新」只能靠 `workbuddy://chat/<id>` 回客户端看
+- 云端直连是「点开才拉」：列表里的条数来自快照与本机索引，**不代表云端最新**
 - 单条会话回放靠空闲超时收尾，超大会话（>5000 事件）可能被截断，可调 `--idle` / `--max`
 - 定时任务类会话通常只有任务定义、没有对话记录，属于数据本身如此
 - Windows / macOS / Linux 的扩展目录都做了探测，但只在 Windows 上实测过
+- **`service` 这条链路只在本地假宿主里验证过**；真客户端 fork 是否成功、`wb.http.get`
+  是否真带 cookie，需要重启客户端后看「数据与诊断」的「云端直连」一行
 
 ---
 

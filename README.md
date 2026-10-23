@@ -1,6 +1,6 @@
 # WorkBuddy 云端会话
 
-把 WorkBuddy **桌面端看不见的云端会话**（网页版 / 微信小程序 / 定时任务）搬进侧栏：可读全文、可搜索、可导出，还能一键跳回原会话接着聊。
+把 WorkBuddy **桌面端看不见的云端会话**（网页版 / 微信小程序 / 定时任务）搬进侧栏：**点进去就是从云端回放的最新全文**，可搜索、可导出，还能一键跳回原会话接着聊。
 
 **[⬇ 下载 Windows 便携版](https://github.com/yhm138/workbuddy-cloud-sessions/releases/latest)** —— 解压后双击 `安装.bat`，不用装 Node。
 
@@ -33,11 +33,12 @@ createProductFeatureHook({ featureKey: 'DesktopCloudTaskEntry', resolve: () => f
 
 于是网页版 / 小程序 / 定时任务里跑过的对话，在客户端里等于消失了。
 
-这个项目做三件事：
+这个项目做四件事：
 
-1. **抓**：用你自己的登录态，把云端正文完整拉下来（ACP over HTTP + SSE）
+1. **抓**：用你自己的登录态，把云端正文完整拉下来（ACP over HTTP + SSE），做成离线快照
 2. **建**：生成一份零依赖的静态页面（列表 + 全文搜索 + 正文分片）
 3. **装**：作为内置扩展装回客户端侧栏，选中即读，不用等网络
+4. **连**：扩展里再 fork 一个 Node service，借用**宿主自己的登录态**现场回放云端 —— 于是点开就是最新，快照退居兜底
 
 > 全程只读，不改数据库、不改 `app.asar`。抓的是你自己的账号、你自己的会话。
 
@@ -47,6 +48,7 @@ createProductFeatureHook({ featureKey: 'DesktopCloudTaskEntry', resolve: () => f
 
 | | 说明 |
 | --- | --- |
+| **云端直连** | 扩展内跑一个 Node service，替你回放云端会话：**不用扫码、不用浏览器 profile**，点开就是最新全文 |
 | **按来源分组** | 网页版 / 微信小程序 / App / 定时任务，各带条数徽标 |
 | **完整正文** | 用户右侧浅块、助手文档流；标题、列表、**表格**、代码块正常渲染 |
 | **工具调用折叠** | `fetch` / `execute` / `search` 收成一行，点开看输入与输出 |
@@ -56,7 +58,8 @@ createProductFeatureHook({ featureKey: 'DesktopCloudTaskEntry', resolve: () => f
 | **填上下文** | 把末尾若干轮塞进当前输入框（不跳转），用于新会话带着上下文提问 |
 | **在线同步** | 走宿主网络通道拉最新列表，显示「同步于 hh:mm」 |
 | **自动同步** | 每次点进面板自动拉一遍云端列表（60 秒节流），新会话顺手补正文，不用手动点 |
-| **落地卡** | 本机没有正文时不挖坑：一个主按钮回原会话，另有网页版兜底 |
+| **补全正文** | `⋯ → 补全云端正文`，把还没有正文的会话逐条从云端回放下来（带进度条，可中断） |
+| **落地卡** | 直连不可用、云端也确实没有正文时，不挖坑：一个主按钮回原会话，另有网页版兜底 |
 | **导出** | 单条复制为 Markdown，或全量导出到 `export/` |
 | **收藏 / 排序 / 统计** | 收藏置顶、按时间或条数排序、来源分布与 30 天活跃曲线 |
 | **深链** | `#/s/<id>` 直达某条会话，可当书签 |
@@ -163,8 +166,16 @@ flowchart LR
   B --> D[".wbcs/ 正文快照"]
   D --> E["wbcs build<br/>data.js + 分片 + 索引"]
   E --> F["wbcs deploy<br/>扩展目录"]
-  F --> G["客户端侧栏<br/>零依赖静态页"]
+  F --> G["客户端侧栏"]
+
+  G -- "点开会话" --> H["扩展内 Node service<br/>server/index.cjs（宿主 fork）"]
+  H -- "wb.http.get 借登录态" --> I["票据 link + token"]
+  I --> C
+  C -- "SSE 回放" --> H
+  H -- "完整正文" --> G
 ```
+
+两条路并存：**快照负责「打开就有、离线可读、可搜索导出」，service 负责「打开就是最新」**。service 没起来（老版本客户端、fork 被拦）时面板自动退回快照模式，行为跟 v1.8.0 一致。
 
 正文不走 REST，走 **ACP（Agent Client Protocol）over HTTP + SSE**：
 
@@ -174,27 +185,44 @@ flowchart LR
 
 最容易踩的坑：不带 `acp-connection-id` 的 POST 一律 `404 connection not found`；SSE 没 ready 就 POST 也一样。
 
+### 云端直连（扩展内 service）
+
+面板是个 iframe，在浏览器里拉正文走不通：ACP 网关不回 `access-control-allow-origin`，也不 expose `acp-connection-id`，`fetch` 一律被 CORS 拦死。
+
+所以扩展声明了一个 fork 出来的 Node service（`server/index.cjs`）：
+
+1. 宿主 fork 子进程并调 `activate(wb)`；`wb.http.get` **自带宿主的登录 cookie**
+2. `GET /console/as/conversations/{id}/session` 换 `{link, token}` —— **不用扫码，也不依赖 Playwright profile**
+3. 这个进程是真 Node，`https` 建 SSE 没有 CORS，POST 带上 `acp-connection-id` 就能回放
+4. 面板侧：`wb:extensions:$resolveLocalRpc` 拿票据 → `$invokeLocalRpcFallback` 调 `fetchBody`
+
+并发闸门 2 条、内存缓存 3 分钟、票据过期自动重换；service 起不来时整套降级回快照模式。
+协议细节（票据字段、`activate` 返回值、`processPolicy` 写法、踩过的坑）见 PROTOCOL.md 6.9。
+
 字段、事件类型、扩展加载规则、深链与握手的实现细节，都在 **[docs/PROTOCOL.md](docs/PROTOCOL.md)**。
 
 ---
 
 ## 面板里能做什么、不能做什么
 
-面板是**索引层**，不是第二个客户端。这条边界值得先讲清楚：
+面板是**只读的浏览层**，不是第二个聊天客户端。这条边界值得先讲清楚：
 
 | 能力 | 面板内 | 说明 |
 | --- | --- | --- |
-| 读历史正文 | ✅ 读本机快照 | 快照由 `wbcs fetch` 生成，或客户端自己打开过该会话时落下 |
-| 读「最新」正文 | ❌ | `wb:conversations:requests` 读的是本机 daemon 历史，云端会话的消息不在本机 |
+| 读「最新」正文 | ✅ service 在跑时 | 点开就从云端回放，正文顶上标「云端最新 · hh:mm（N 个事件）」 |
+| 读历史正文 | ✅ 退回本机快照 | service 不可用时自动降级，标「本机快照 · 可能不是最新」并弹一次说明 |
+| 小程序 / 网页版会话正文 | ✅ service 在跑时 | 客户端自己打开这类会话可能是空的，面板能直接回放 |
+| 全文搜索 | ✅ 快照 + 已直连拉过的 | 搜的是「手上已有的正文」：`wbcs fetch` 的快照，加上本次面板里从云端拉回来的 |
 | 接着聊 | ✅ 通过深链 | 「回到会话」把客户端切到同一个 Session，历史和后续都在那边 |
-| 网页版 / 小程序会话 | ⚠️ 客户端可能空 | 客户端把 `workbuddy-mp` 映射成 `miniprogram`，没有回放通道，会显示「暂无对话记录」 |
+| 在面板里发消息 | ❌ | 面板只读，不碰会话状态；要聊就回原会话 |
+| 3 分钟内重复打开 | ⚡ 走缓存 | service 内存缓存 3 分钟，`⋯ → 从云端拉最新正文` 可强制重拉 |
 
-所以界面里会看到两个提示：
+所以界面里会看到两种顶部提示，别混淆：
 
-- 正文顶部的「本机快照 · 可能不是最新」
-- 进入有快照的会话时弹一次说明（**点遮罩不关闭**，必须点 `✕` / 「先看快照」/ 按 `Esc`）
+- 「**云端最新** · hh:mm 从云端回放」——这是真·最新
+- 「**本机快照** · 可能不是最新」——service 没起来时的降级，进详情会弹一次说明（**点遮罩不关闭**，必须点 `✕` / 「先看快照」/ 按 `Esc`）
 
-把这两个提示删掉，人就会误以为自己在看最新的完整对话 —— 这比看不到更糟。
+把这两个提示合并成一种，人就会把半截快照当成完整对话 —— 这比看不到更糟。
 
 ---
 
@@ -216,22 +244,28 @@ src/config.js          路径与平台探测（扩展目录自动发现）
 src/db.js              读 workbuddy.db（node:sqlite，只读）
 src/browser.js         浏览器兜底链：Chrome → Edge → 本机 Chromium → 自带
 src/auth.js            Playwright 持久登录
-src/acp.js             ACP over HTTP + SSE 客户端
-src/parse.js           session/update → 扁平面条结构
+src/acp.js             ACP over HTTP + SSE 客户端（CLI 用）
+src/parse.js           session/update → 扁平面条结构（CLI 用）
 src/fetch.js           全量抓取（增量、原子落盘）
 src/build.js           生成 data.js / 正文分片 / 搜索索引
 src/deploy.js          安装为内置扩展
 src/install.js         一键安装 / 卸载向导
 src/serve.js           本地预览服务
 src/export.js          Markdown 导出
+server/index.cjs       扩展内 service（宿主 fork）：票据 → SSE → 分片
+server/acp.cjs         ACP 客户端（CJS，service 与 CLI 共用同一份逻辑）
+server/parse.cjs       事件解析（同上）
 ui/index.html          扩展页面（零依赖，纯原生 JS）
 tools/build-release.js 打 Windows 便携包（自带 node.exe）
 tools/release/         安装包里的 install.bat / uninstall.bat / 使用说明
 tools/demo-shots.js    用示例数据生成 README 截图
 test/handshake.html    假宿主，验证 guest-ready 握手
 test/run-handshake.js  一键跑握手指令自检
-extension.json         扩展清单
-distribution.json      分发清单（builtin + iframe）
+test/mock-gateway.cjs  假 ACP 网关（联网零依赖，自测用）
+test/service-acp.js    service 端到端自测（票据 / 回放 / 缓存 / 失败分支）
+test/panel-service.js  面板 + service 联调（Playwright，假宿主 + 假网关）
+extension.json         扩展清单（含 service 声明）
+distribution.json      分发清单（builtin + iframe + processPolicy）
 docs/PROTOCOL.md       协议与机制逆向笔记
 ```
 
@@ -241,13 +275,16 @@ docs/PROTOCOL.md       协议与机制逆向笔记
 
 ```bash
 npm test                    # guest-ready 握手自检（真实 Chrome/Edge）
+npm run test:service        # service 端到端自测（假网关，不联网、不用登录）
+npm run test:panel          # 面板 + service 联调（Playwright，假宿主；NO_SERVICE=1 测降级）
 npm run release             # 生成 dist/*-win-x64.zip（需要 unzip / zip 命令）
 node tools/demo-shots.js    # 重新生成 docs/images/*.png
 ```
 
-版本号必须三处一致：`extension.json`、`distribution.json`、`ui/index.html` 里的 `PAGE_VERSION`。
-宿主按清单版本给页面打 `?v=`，页面拿它做自检；不一致时面板顶部会直接提示「重启即可」。
-`wbcs build` 会校验，不一致直接报错。
+版本号必须四处一致：`package.json`、`extension.json`、`distribution.json`，以及
+`server/index.cjs` 里的 `VERSION`（部署目录里没有 package.json，service 只能写死）。
+页面另有一份 `PAGE_VERSION`，宿主按清单版本给 iframe 打 `?v=`，不一致时面板顶部会提示「重启即可」。
+`wbcs build` 与 CI 都会校验这几处。
 
 ---
 
@@ -257,7 +294,18 @@ node tools/demo-shots.js    # 重新生成 docs/images/*.png
 重新 `wbcs login`。Playwright profile 里的 cookie 有有效期，通常能撑很久。
 
 **某条会话点开是空的**
-纯定时任务的会话本来就没有对话记录，页面会明确提示。要么 `wbcs fetch --only <id>` 补，要么点卡片里的「回到会话 / 网页版」。
+纯定时任务的会话本来就没有对话记录，页面会明确提示。要么点「从云端拉最新正文」再试，要么 `wbcs fetch --only <id>` 补，要么走卡片里的「回到会话 / 网页版」。
+
+**正文顶部写的是「本机快照」，不是「云端最新」**
+说明 service 没起来，面板降级了。看页面底部「数据与诊断」的「云端直连」一行，`不可用 —— …` 后面就是原因。常见三种：
+
+1. 扩展目录是旧版本（重新 `wbcs deploy`，然后**完全退出客户端**再打开）
+2. 客户端版本不支持扩展 service（`extension.json` 的 `service` 被忽略）
+3. fork 被安全软件 / 企业策略拦掉
+
+**「云端直连」显示活着的版本号，但拉正文报 `NO_TICKET`**
+宿主的登录态过期了。在客户端里随便打开一个会话、或重新登录一次，再点「从云端拉最新正文」。
+这条链路借的是**客户端自己的 cookie**，不读 `.wbcs/profile`，所以 `wbcs login` 对它没影响。
 
 **面板提示「插件加载失败，请检查网络后重新加载」**
 两种原因，看页面底部「数据与诊断」区分：

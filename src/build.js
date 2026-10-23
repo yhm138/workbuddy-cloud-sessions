@@ -132,7 +132,8 @@ function build(opts = {}) {
       count: msgs.length,
       stats,
       messages: msgs.map((m) => [
-        m.r ? m.r[0] : "a", // u / a / t / h
+        // 单字母角色要显式映射：thought 和 tool 首字母都是 t，不能取 m.r[0]
+        { user: "u", assistant: "a", thought: "h", tool: "t" }[m.r] || "a",
         m.t || "",
         m.k || "",
         m.n || "",

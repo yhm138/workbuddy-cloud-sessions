@@ -72,8 +72,8 @@ function pruneStale(dest, keep) {
   const removed = [];
   for (const rel of walk(dest)) {
     if (keep.has(rel)) continue;
-    // ui/ 下是我们自己的产物；其余顶层文件也可能被宿主引用，保守一点只清 ui/
-    if (!rel.startsWith("ui/")) continue;
+    // ui/ 与 server/ 是我们自己的产物；其余顶层文件也可能被宿主引用，保守一点只清这两处
+    if (!rel.startsWith("ui/") && !rel.startsWith("server/")) continue;
     fs.rmSync(path.join(dest, rel), { force: true });
     removed.push(rel);
   }
@@ -95,7 +95,7 @@ function deploy(opts = {}) {
   const dest = path.join(targets[0], extId);
 
   // 1. 先校验源产物，再动目标目录
-  const mustSrc = ["extension.json", "ui/index.html", "ui/data.js"];
+  const mustSrc = ["extension.json", "ui/index.html", "ui/data.js", "server/index.cjs"];
   const missingSrc = mustSrc.filter((f) => !fs.existsSync(path.join(ROOT, f)));
   if (missingSrc.length) {
     throw new Error(
@@ -129,13 +129,16 @@ function deploy(opts = {}) {
     if (fs.existsSync(p)) fs.copyFileSync(p, path.join(dest, f));
   }
   copyTree(UI_DIR, path.join(dest, "ui"));
+  // fork 的 service（云端直连）：src/ 不部署，server/ 必须部署
+  copyTree(path.join(ROOT, "server"), path.join(dest, "server"));
 
   // 5. 清掉上一版遗留的分片（先写后删，任何时刻都不缺文件）
   const keep = new Set(["extension.json", "distribution.json", "icon.svg", "README.md"]);
   for (const rel of walk(UI_DIR)) keep.add("ui/" + rel);
+  for (const rel of walk(path.join(ROOT, "server"))) keep.add("server/" + rel);
   const removed = pruneStale(dest, keep);
 
-  const must = ["extension.json", "ui/index.html", "ui/data.js"];
+  const must = ["extension.json", "ui/index.html", "ui/data.js", "server/index.cjs"];
   const missing = must.filter((f) => !fs.existsSync(path.join(dest, f)));
   if (missing.length) throw new Error(`部署不完整，缺少：${missing.join(", ")}`);
 

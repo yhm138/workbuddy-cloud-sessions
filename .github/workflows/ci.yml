@@ -15,7 +15,7 @@ jobs:
           node-version: 22
       - name: 语法检查
         run: |
-          for f in bin/*.js src/*.js; do node --check "$f"; done
+          for f in bin/*.js src/*.js test/*.cjs server/*.cjs; do node --check "$f"; done
           node -e "
             const fs=require('fs');
             const html=fs.readFileSync('ui/index.html','utf8');
@@ -27,10 +27,18 @@ jobs:
         run: |
           node -e "
             const a=require('./extension.json'), b=require('./distribution.json');
+            const p=require('./package.json');
             if (a.id !== b.extensionId) throw new Error('extensionId 不一致');
             if (a.version !== b.version) throw new Error('version 不一致');
+            if (a.version !== p.version) throw new Error('package.json version 不一致');
             if (a.ui.entry.placement !== 'sidebar') throw new Error('placement 必须是 sidebar');
+            if (!a.service || a.service.process !== 'fork') throw new Error('缺少 service 声明');
+            if (!b.processPolicy || b.processPolicy.server !== 'fork') throw new Error('processPolicy.server 必须是 fork');
+            const svc=require('./server/index.cjs').VERSION;
+            if (svc !== p.version) throw new Error('server VERSION 与 package.json 不一致: ' + svc + ' vs ' + p.version);
             console.log('manifest ok', a.id, a.version);
           "
+      - name: service 自测（假网关，不需要登录态）
+        run: node test/service-acp.js
       - name: CLI 自检
         run: node bin/wbcs.js --help

@@ -43,6 +43,7 @@ const OUT_ZIP = path.join(DIST, `${PKG_NAME}.zip`);
 const APP_ITEMS = [
   "bin",
   "src",
+  "server",
   "extension.json",
   "distribution.json",
   "icon.svg",

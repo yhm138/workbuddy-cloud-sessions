@@ -367,6 +367,27 @@
   .snap b { font-weight: 600; color: var(--fg); }
   .snap .lnk { color: var(--link); cursor: pointer; text-decoration: none; white-space: nowrap; }
   .snap .lnk:hover { text-decoration: underline; }
+  /* 云端直连拉下来的正文：这不是快照，别再吓唬用户 */
+  .snap.cloud { background: rgba(22, 163, 74, .10); }
+  .snap.cloud b { color: var(--fg); }
+  html[data-theme="dark"] .snap.cloud { background: rgba(74, 222, 128, .12); }
+
+  /* 后台任务条：补全正文 / 首次进面板拉最新 */
+  .jobbar {
+    display: flex; align-items: center; gap: 8px;
+    margin: 10px 12px 2px; padding: 7px 10px;
+    background: var(--bg-soft); border-radius: 8px;
+    font-size: 11.5px; color: var(--fg-dim);
+  }
+  .jobbar .jt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .jobbar button { flex: 0 0 auto; height: 22px; padding: 0 8px; font-size: 11px; }
+  .spin {
+    flex: 0 0 auto; width: 12px; height: 12px; border-radius: 50%;
+    border: 1.6px solid var(--line); border-top-color: var(--fg-dim);
+    animation: wbcs-spin .8s linear infinite;
+  }
+  @keyframes wbcs-spin { to { transform: rotate(360deg); } }
+  .row .dot.live { background: #16a34a; opacity: 1; }
 
   #dChat.go { flex: 0 0 auto; height: 26px; padding: 0 9px; margin-left: 1px; font-size: 12px; font-weight: 500; }
 
@@ -625,6 +646,7 @@
       <button id="listMore" class="icon-only" title="更多" aria-haspopup="true" aria-expanded="false">⋯</button>
       <div class="menu" id="listMenu" hidden>
         <button id="syncBtn" title="立即从云端拉最新会话列表（进面板时已自动同步，点这里可手动重试）"><span id="syncLabel">同步云端列表</span><em>拉最新会话并补正文</em></button>
+        <button id="fillAllBtn" title="把还没正文的会话逐条从云端回放下来（走扩展内的 Node 服务，不用扫码）"><span>补全云端正文</span><em>直连云端 · 不用扫码</em></button>
         <button id="statsBtn"><span>统计</span><em>来源分布与活跃曲线</em></button>
         <button id="webBtn"><span>网页版</span><em>在系统浏览器打开</em></button>
       </div>
@@ -642,6 +664,7 @@
 </header>
 
 <main id="main">
+  <div id="jobHost"></div>
   <div id="listView"></div>
 
   <div id="detailView">
@@ -656,6 +679,7 @@
       <div class="menu-wrap">
         <button id="dMore" class="icon" title="更多" aria-haspopup="true" aria-expanded="false">⋯</button>
         <div class="menu" id="dMenu" hidden>
+          <button id="dPull" data-close><span>从云端拉最新正文</span><em>直连云端 · 不用扫码</em></button>
           <button id="dFill" data-close><span>填上下文</span><em>把历史塞进当前输入框</em></button>
           <button id="dWeb" data-close><span>在网页版打开</span></button>
           <button id="dMd" data-close><span>复制为 Markdown</span></button>
@@ -738,7 +762,7 @@
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.8.0";
+  var PAGE_VERSION = "1.9.0";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -754,6 +778,9 @@
   var INDEX = {};         // id -> {n, ok}
   var SEARCH = null;      // [[id, [[idx, role, snippet], ...]], ...]
   var SEARCH_BY_ID = null;
+  /* 云端直连拉回来的正文不进 _search.js（那是 build 时生成的静态文件），
+     所以在内存里补一份同格式的索引，否则「搜得到」和「看得到」会对不上。 */
+  var CLOUD_IDX = {};
   var FAV = loadFav();
   var fillBroken = false;   // 宿主拒绝过一次 wb:message:fill 后，按钮退化成复制
 
@@ -937,6 +964,141 @@
         var g = guest();
         if (!g) return disabled ? "none" : "pending";
         return g.ready ? "port" : "port(未确认)";
+      }
+    };
+  })();
+
+  /**
+   * 扩展内的 Node service（云端直连）。
+   *
+   * 走的是宿主的 Local RPC：先 `$resolveLocalRpc` 换一张票据，再用
+   * `$invokeLocalRpcFallback` 调方法。票据 6 分钟过期，过期就重新换一张；
+   * 服务被宿主回收（idle evict）时也会走到这里，所以失败要能自愈。
+   *
+   * 通道能力只在通道建立后才有；服务不可用（老版本没声明 service、
+   * fork 失败、被权限拦）时整个模块降级成 off，面板回到「快照 + 回到会话」。
+   */
+  var SB = (function () {
+    var EXT = "cloud-sessions";
+    var grant = null;            // { token, exp }
+    var state = "unknown";       // unknown | ok | off
+    var info = null;             // ping 结果
+    var lastErr = "";
+    var style = null;            // "port" | "ipc"
+    try { style = localStorage.getItem("wbcs.sbStyle") || null; } catch (e) {}
+
+    function save() {
+      try { if (style) localStorage.setItem("wbcs.sbStyle", style); } catch (e) {}
+    }
+
+    function viaPort(channel, args, timeout) {
+      return Bridge.invoke(channel, args, timeout);
+    }
+
+    function viaIpc(channel, args) {
+      var fn = window.__wbInvoke;
+      if (typeof fn !== "function") return Promise.reject(new Error("__wbInvoke 不可用"));
+      try {
+        return Promise.resolve(fn.apply(null, [channel, null].concat(args || [])));
+      } catch (e) {
+        return Promise.reject(e);
+      }
+    }
+
+    /** resolve 是幂等的（顶多多发一张票据），两条通道可以一起试 */
+    function resolveGrant(method) {
+      var args = [EXT, method];
+      function one(fn) {
+        if (!fn) return Promise.reject(new Error("通道不可用"));
+        return fn("wb:extensions:$resolveLocalRpc", args, 20000).then(function (g) {
+          if (!g || !g.fallbackToken) {
+            var e = new Error("宿主没给票据（扩展可能没声明 service）");
+            e.code = "NO_GRANT";
+            throw e;
+          }
+          grant = {
+            token: g.fallbackToken,
+            exp: g.fallbackExpiresAt || (Date.now() + 300000),
+            methods: g.methods || []
+          };
+          return grant;
+        });
+      }
+      if (style === "port") return one(function (c, a, t) { return viaPort(c, a, t); });
+      if (style === "ipc") return one(function (c, a) { return viaIpc(c, a); });
+      return new Promise(function (resolve, reject) {
+        var left = 2, errs = [];
+        function ok(v, how) {
+          if (!grant || !grant.token) return;
+          if (!style) { style = how; save(); log("service/style", how); }
+          resolve(v);
+        }
+        function bad(how, e) {
+          errs.push(how + ":" + e.message);
+          if (--left === 0) reject(new Error(errs.join(" | ")));
+        }
+        one(function (c, a, t) { return viaPort(c, a, t); }).then(function (v) { ok(v, "port"); }, function (e) { bad("port", e); });
+        one(function (c, a) { return viaIpc(c, a); }).then(function (v) { ok(v, "ipc"); }, function (e) { bad("ipc", e); });
+      });
+    }
+
+    function invokeOnce(method, payload, timeout) {
+      // 宿主签名：invokeLocalRpcFallback(target, method, payload, fallbackToken)
+      var args = [EXT, method, payload, grant.token];
+      if (style === "ipc") return viaIpc("wb:extensions:$invokeLocalRpcFallback", args);
+      return viaPort("wb:extensions:$invokeLocalRpcFallback", args, timeout || 180000);
+    }
+
+    function call(method, payload, timeout) {
+      var fresh = grant && grant.exp > Date.now() + 5000;
+      var p = fresh ? invokeOnce(method, payload, timeout) : resolveGrant(method).then(function () {
+        return invokeOnce(method, payload, timeout);
+      });
+      return p.catch(function (e) {
+        var msg = String((e && e.message) || e);
+        if (!/PERMISSION|STALE|EXPIRED|denied|invalid|过期|票据/i.test(msg)) throw e;
+        grant = null;
+        return resolveGrant(method).then(function () { return invokeOnce(method, payload, timeout); });
+      });
+    }
+
+    function probe() {
+      return call("ping", {}, 30000).then(function (r) {
+        state = "ok";
+        info = r;
+        lastErr = "";
+        log("service/ok", "v" + r.version + " pid=" + r.pid);
+        return r;
+      }).catch(function (e) {
+        state = "off";
+        lastErr = e.message;
+        log("service/off", e.message);
+        throw e;
+      });
+    }
+
+    return {
+      state: function () { return state; },
+      info: function () { return info; },
+      error: function () { return lastErr; },
+      style: function () { return style || "-"; },
+      probe: probe,
+      status: function () { return call("status", {}, 20000); },
+      fetchBody: function (id, opts) {
+        if (state === "off") return Promise.reject(new Error("service 不可用"));
+        return call("fetchBody", Object.assign({ id: id }, opts || {}), 180000).then(function (r) {
+          if (!r || r.ok !== true) {
+            var e = new Error((r && (r.error || r.code)) || "服务返回失败");
+            e.code = r && r.code;
+            state = "ok";
+            throw e;
+          }
+          state = "ok";
+          return r;
+        }).catch(function (e) {
+          if (/PERMISSION|STALE|NO_GRANT|不可用/.test(String(e.message))) state = "off";
+          throw e;
+        });
       }
     };
   })();
@@ -1257,10 +1419,12 @@
       if (!fresh.length) {
         // 自动同步时不打扰：只有确实有新会话才提示
         if (!auto) toast("已同步 " + list.length + " 条会话，没有新的");
+        prefetchRecent();
         return;
       }
       toast("已同步，新增 " + fresh.length + " 条，正在拉正文…", 2600);
       pullBodies(fresh);
+      prefetchRecent();
     }).catch(function (e) {
       log("sync/failed", e.message + (e.code ? " [" + e.code + "]" : "") + (auto ? "（自动）" : ""));
       if (!auto) toast("同步失败：" + e.message + "（宿主可能未放行网络通道）");
@@ -1268,6 +1432,102 @@
       btn.disabled = false;
       syncing = false;
       if (auto) lastAutoSync = 0;   // 通道还没就绪，别把节流额度用掉
+    });
+  }
+
+  /* -------- 后台补正文：service 直连云端，串行跑，列表里带进度 -------- */
+  var fillJob = null;
+
+  function jobBar(text, onStop) {
+    var host = document.getElementById("jobHost");
+    if (!host) return null;
+    var bar = el("div", "jobbar");
+    bar.appendChild(el("div", "spin"));
+    var t = el("div", "jt", text);
+    bar.appendChild(t);
+    var btn = el("button", null, "停止");
+    btn.onclick = onStop;
+    bar.appendChild(btn);
+    host.appendChild(bar);
+    return { bar: bar, txt: t, btn: btn };
+  }
+
+  /**
+   * @param {object[]} list  要补的会话
+   * @param {{label?:string, force?:boolean, max?:number}} opts
+   */
+  function startFill(list, opts) {
+    opts = opts || {};
+    if (fillJob) { toast("已经在补了"); return fillJob.promise; }
+    var queue = list.slice(0, opts.max || 999);
+    if (!queue.length) { toast("没有要补的会话"); return Promise.resolve(0); }
+
+    var job = { done: 0, total: queue.length, stop: false };
+    fillJob = job;
+    var ui = jobBar((opts.label || "从云端补正文") + " 0/" + job.total, function () {
+      job.stop = true;
+      if (ui) ui.txt.textContent = "正在停止…";
+    });
+    log("fill/start", job.total + " 条");
+
+    return new Promise(function (resolve) {
+      function finish(reason) {
+        if (ui && ui.bar) ui.bar.remove();
+        fillJob = null;
+        log("fill/end", (reason || "done") + " " + job.done + "/" + job.total);
+        render();
+        resolve(job.done);
+      }
+      function step() {
+        if (job.stop) return finish("stopped");
+        var it = queue.shift();
+        if (!it) return finish("done");
+        SB.fetchBody(it.id, opts.force ? { force: true } : null).then(function (r) {
+          var shard = r.shard || r;
+          shard.id = it.id;
+          acceptShard(it, shard, "cloud");
+        }).catch(function (e) {
+          log("fill/fail", it.id + " " + e.message + (e.code ? " [" + e.code + "]" : ""));
+          if (/service 不可用|PERMISSION|NO_GRANT/.test(String(e.message))) job.stop = true;
+        }).then(function () {
+          job.done++;
+          if (ui) {
+            ui.txt.textContent = (opts.label || "从云端补正文") + " " + job.done + "/" + job.total;
+          }
+          if (state.view === "list" || state.view === "search") render();
+          setTimeout(step, 80);
+        });
+      }
+      step();
+    });
+  }
+
+  /** 进面板先补最近几条没正文的，点进去就不会是空壳 */
+  var prefetched = {};
+  /* 拉不动的（纯定时任务会话、云端没正文）记一笔，24 小时内别再试，
+     否则每次进面板都要为同几条白跑一遍。 */
+  var PULL_FAIL = {};
+  try { PULL_FAIL = JSON.parse(localStorage.getItem("wbcs.pullFail") || "{}") || {}; } catch (e) {}
+  var FAIL_TTL = 24 * 3600 * 1000;
+  function markPullFail(id) {
+    PULL_FAIL[id] = Date.now();
+    var cut = Date.now() - FAIL_TTL;
+    Object.keys(PULL_FAIL).forEach(function (k) { if (!(PULL_FAIL[k] > cut)) delete PULL_FAIL[k]; });
+    try { localStorage.setItem("wbcs.pullFail", JSON.stringify(PULL_FAIL)); } catch (e) {}
+  }
+  function prefetchRecent() {
+    if (SB.state() !== "ok" || fillJob) return;
+    var cut = Date.now() - FAIL_TTL;
+    var cand = DATA.items
+      .filter(function (it) {
+        return !(it.n > 0) && !prefetched[it.id] && !(PULL_FAIL[it.id] > cut);
+      })
+      .sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); })
+      .slice(0, 3);
+    if (!cand.length) return;
+    cand.forEach(function (it) { prefetched[it.id] = 1; });
+    startFill(cand, { label: "预取最近会话" }).then(function () {
+      cand.forEach(function (it) { if (!(it.n > 0)) markPullFail(it.id); });
     });
   }
 
@@ -1455,37 +1715,73 @@
   function pullOne(it) {
     it.pull = "busy";
     render();
-    var viaWb = WB_DEAD
-      ? Promise.reject(new Error("wb 通道本次已判定不可用"))
-      : wbCall("wb:conversations:requests", [it.id], 9000).then(function (page) {
-          log("requests", "ok " + shapeOf(page));
-          var shard = requestsToShard(page, it.id);
-          if (!shard) throw new Error("requests 里没有可解析的消息");
-          acceptShard(it, shard);
-          return true;
-        }).catch(function (e) {
-          if (/超时|不可用|PERMISSION|NOT_FOUND|denied/i.test(e.message)) WB_DEAD = true;
-          throw e;
-        });
 
-    return viaWb.catch(function (e) {
-      log("requests", "fail " + e.message);
-      return pullViaAcp(it).catch(function (e2) {
-        log("acp", "fail " + (e2.code ? "[" + e2.code + "] " : "") + e2.message);
-        it.pull = "fail";
-        return false;
+    /* ① 云端直连（扩展内 service）：最新也最全，成功就不用再兜底 */
+    var viaCloud = (SB.state() === "ok"
+      ? SB.fetchBody(it.id)
+      : Promise.reject(new Error("service 不可用"))
+    ).then(function (r) {
+      var shard = r.shard || r;
+      shard.id = it.id;
+      acceptShard(it, shard, "cloud");
+      return true;
+    });
+
+    /* ② 本机 daemon 的 requests（只有 local 会话有真数据） */
+    function viaLocal() {
+      return WB_DEAD
+        ? Promise.reject(new Error("wb 通道本次已判定不可用"))
+        : wbCall("wb:conversations:requests", [it.id], 9000).then(function (page) {
+            log("requests", "ok " + shapeOf(page));
+            var shard = requestsToShard(page, it.id);
+            if (!shard) throw new Error("requests 里没有可解析的消息");
+            acceptShard(it, shard);
+            return true;
+          }).catch(function (e) {
+            if (/超时|不可用|PERMISSION|NOT_FOUND|denied/i.test(e.message)) WB_DEAD = true;
+            throw e;
+          });
+    }
+
+    return viaCloud.catch(function (e) {
+      if (SB.state() !== "off") log("cloud", "fail " + e.message);
+      return viaLocal().catch(function (e2) {
+        log("requests", "fail " + e2.message);
+        return pullViaAcp(it).catch(function (e3) {
+          log("acp", "fail " + (e3.code ? "[" + e3.code + "] " : "") + e3.message);
+          it.pull = "fail";
+          return false;
+        });
       });
     });
   }
 
-  function acceptShard(it, shard) {
+  function acceptShard(it, shard, source) {
     it.pull = "ok";
     it.ok = true;
     it.n = (shard.messages || []).length;
     it.t = (shard.stats && shard.stats.tool) || 0;
+    it.cloud = source === "cloud";
+    if (source === "cloud") it.liveAt = shard.fetchedAt || Date.now();
     SESSIONS[it.id] = shard;
     INDEX[it.id] = { n: it.n, ok: true };
-    if (shard.title) it.title = shard.title;
+    if (shard.title && shard.title !== it.title) it.title = shard.title;
+    if (source === "cloud") indexCloud(it.id, shard);
+  }
+
+  /** 给云端正文建一份搜索索引（格式同 build.js 的 _search.js，只收正文类消息） */
+  function indexCloud(id, shard) {
+    var entries = [];
+    (shard.messages || []).forEach(function (m, idx) {
+      var r = m[0] || "a";
+      if (r === "t") return;
+      var text = String(m[1] || "").replace(/\s+/g, " ").slice(0, 200);
+      if (text.length < 2) return;
+      entries.push([idx, r, text]);
+    });
+    if (!entries.length) return;
+    CLOUD_IDX[id] = entries;
+    if (SEARCH_BY_ID) SEARCH_BY_ID[id] = entries;
   }
 
   /** ACP 直连：app 页面内 fetch 长连接（CORS 可能被挡，失败就是失败） */
@@ -1844,13 +2140,16 @@
    * 所以这里不做「重试阅读器」，只做一件事：把人送回去。
    */
   function uncachedCard(it, id) {
+    var cloudReady = SB.state() === "ok";
     var box = el("div", "uncached");
     var card = el("div", "card2");
-    card.appendChild(el("div", "ttl", "完整内容在客户端"));
+    card.appendChild(el("div", "ttl", cloudReady ? "这次没拉到正文" : "完整内容在客户端"));
 
     var txt = el("div", "txt");
-    txt.textContent = "这条会话的消息存在云端，面板只能读到本机已缓存的片段。" +
-      "点下面的按钮会直接打开同一个 Session，历史和后续对话都是最新的。";
+    txt.textContent = cloudReady
+      ? "云端直连这次没成功（可能是网络或网关超时）。再试一次通常就好；实在不行回原会话看，那边一定是全的。"
+      : "这条会话的消息存在云端，面板只能读到本机已缓存的片段。" +
+        "点下面的按钮会直接打开同一个 Session，历史和后续对话都是最新的。";
     card.appendChild(txt);
 
     var t = relTime(it.ts);
@@ -1859,28 +2158,49 @@
     card.appendChild(kv);
 
     var acts = el("div", "acts wide");
-    var back = el("button", "primary", "回到会话");
-    back.onclick = function () { openSessionInClient(id); };
-    acts.appendChild(back);
+    var primary = el("button", "primary", cloudReady ? "重试云端读取" : "回到会话");
+    primary.onclick = function () {
+      if (!cloudReady) { openSessionInClient(id); return; }
+      primary.disabled = true;
+      primary.textContent = "读取中…";
+      SB.fetchBody(id, { force: true }).then(function (r) {
+        var shard = r.shard || r;
+        shard.id = id;
+        acceptShard(it, shard, "cloud");
+        toast("已拉到 " + (shard.messages || []).length + " 条");
+        openDetail(id);
+      }).catch(function (e) {
+        primary.disabled = false;
+        primary.textContent = "重试云端读取";
+        toast("还是不行：" + e.message);
+      });
+    };
+    acts.appendChild(primary);
     card.appendChild(acts);
 
     var subs = el("div", "acts sub");
 
-    var pull = el("button", null, "试读快照");
-    pull.onclick = function () {
-      pull.disabled = true;
-      pull.textContent = "读取中…";
-      pullOne(it).then(function (good) {
-        if (good) {
-          it.pull = "ok";
-          toast("读到 " + (it.n || 0) + " 条快照");
-        } else {
-          toast("云端没有可读快照");
-        }
-        openDetail(id);
-      });
-    };
-    subs.appendChild(pull);
+    if (cloudReady) {
+      var back = el("button", null, "回到会话");
+      back.onclick = function () { openSessionInClient(id); };
+      subs.appendChild(back);
+    } else {
+      var pull = el("button", null, "试读快照");
+      pull.onclick = function () {
+        pull.disabled = true;
+        pull.textContent = "读取中…";
+        pullOne(it).then(function (good) {
+          if (good) {
+            it.pull = "ok";
+            toast("读到 " + (it.n || 0) + " 条快照");
+          } else {
+            toast("云端没有可读快照");
+          }
+          openDetail(id);
+        });
+      };
+      subs.appendChild(pull);
+    }
 
     var web = el("button", null, "网页版");
     web.onclick = function () { openExternal(WEB + "/app/conversation/" + id); };
@@ -1944,6 +2264,18 @@
       openSessionInClient(id);
     };
     d.appendChild(a);
+    return d;
+  }
+
+  /** 云端直连拉下来的正文：明确告诉用户「这就是最新」，别再让人怀疑是半截快照 */
+  function cloudNote(shard) {
+    var d = el("div", "snap cloud");
+    d.appendChild(el("b", null, "云端最新"));
+    var t = shard.fetchedAt ? relTime(shard.fetchedAt) : null;
+    var txt = " · " + (t ? t.abs : "刚刚") + " 从云端回放";
+    if (shard.events) txt += "（" + shard.events + " 个事件）";
+    txt += shard.truncated ? "，消息过多只保留最后 " + (shard.messages || []).length + " 条。" : "。";
+    d.appendChild(document.createTextNode(txt));
     return d;
   }
 
@@ -2055,6 +2387,10 @@
 
     var dot = el("span", "dot");
     dot.dataset.o = ORDER.indexOf(it.origin) >= 0 ? it.origin : "other";
+    if (it.cloud) {
+      dot.classList.add("live");
+      dot.title = "正文已从云端直连拉取（最新）";
+    }
 
     var body = el("div", "body");
     var name = el("div", "name");
@@ -2131,7 +2467,8 @@
       DATA.items.forEach(function (it) {
         if (Object.keys(state.origin).length && !state.origin[it.origin]) return;
         var titleHit = it.title.toLowerCase().indexOf(ql) >= 0;
-        var entries = (SEARCH_BY_ID && SEARCH_BY_ID[it.id]) || [];
+        /* 云端索引更全，优先用；没有再退回 build 时的静态索引 */
+        var entries = CLOUD_IDX[it.id] || (SEARCH_BY_ID && SEARCH_BY_ID[it.id]) || [];
         var matched = entries.filter(function (e) { return (e[2] || "").toLowerCase().indexOf(ql) >= 0; });
         if (!titleHit && !matched.length) return;
         rows.push({ it: it, titleHit: titleHit, matched: matched });
@@ -2261,40 +2598,91 @@
 
     var body = document.getElementById("dBody");
     body.textContent = "";
-    body.appendChild(stateBox("正在读取正文…", ""));
     log("open", id);
 
-    loadSession(id, function (err, shard) {
-      if (err) {
-        log("shard", "miss " + err.message);
-        body.textContent = "";
-        if (it.live || it.pull === "fail" || !it.n) {
-          body.appendChild(uncachedCard(it, id));
-          return;
-        }
-        var s = shard || { id: id, ok: false, messages: [] };
-        s.id = id;
-        body.appendChild(renderThread(s, null));
-        return;
-      }
+    /* 三种正文来源，优先级从高到低：
+     *   ① 扩展内 service 直连云端（最新、最全，不用扫码）
+     *   ② 本机快照分片（可能半截）
+     *   ③ 本机 daemon 的 requests（local 会话才有）
+     * 先秒开快照，再让云端在后面补 —— 比一直转圈更接近「打开就是最新」。 */
+    function paint(shard, src) {
       var got = (shard.messages || []).length;
-      log("shard", "ok " + got + " msgs");
       body.textContent = "";
       if (!got) {
-        /* 读到空分片：别留白屏，直接给回原会话的入口 */
         body.appendChild(uncachedCard(it, id));
         setComposer(id, false);
         return;
       }
-      body.appendChild(snapNote(it, id, got));
+      body.appendChild(src === "cloud" ? cloudNote(shard) : snapNote(it, id, got));
       body.appendChild(renderThread(shard, jumpIdx));
-      maybeWarnSnapshot(it, id, got);
-      setComposer(id, (shard.messages || []).length > 0);
+      if (src !== "cloud") maybeWarnSnapshot(it, id, got);
+      setComposer(id, true);
+      var t = relTime(it.ts);
+      document.getElementById("dSub").textContent =
+        (t ? t.abs + " · " : "") + label(it.origin) + " · " + got + " 条" +
+        (src === "cloud" ? " · 云端最新" : "");
       if (findQ && findQ.length >= 1) {
         document.getElementById("findbar").classList.add("on");
         document.getElementById("fq").value = findQ;
         setTimeout(function () { findInSession(findQ); }, 60);
       }
+    }
+
+    function stillHere() {
+      return state.view === "detail" && state.current && state.current.id === id;
+    }
+
+    function fromCloud() {
+      if (SB.state() === "off") return Promise.reject(new Error("service 不可用"));
+      return SB.fetchBody(id).then(function (r) {
+        var shard = r.shard || r;
+        shard.id = id;
+        acceptShard(it, shard, "cloud");
+        if (stillHere()) paint(shard, "cloud");
+        return shard;
+      });
+    }
+
+    /* 老路径：本机分片 → 本机 daemon，全失败才给「回到会话」落地卡 */
+    function fromLocal(onFail) {
+      loadSession(id, function (err, shard) {
+        if (err) {
+          log("shard", "miss " + err.message);
+          if (!stillHere()) return;
+          if (it.live || it.pull === "fail" || !it.n) {
+            body.textContent = "";
+            body.appendChild(uncachedCard(it, id));
+            if (onFail) onFail();
+            return;
+          }
+          body.textContent = "";
+          var s = shard || { id: id, ok: false, messages: [] };
+          s.id = id;
+          body.appendChild(renderThread(s, null));
+          return;
+        }
+        log("shard", "ok " + (shard.messages || []).length + " msgs");
+        if (!stillHere()) return;
+        paint(shard, "snap");
+      });
+    }
+
+    var snap = SESSIONS[id];
+    var hasSnap = !!(snap && (snap.messages || []).length);
+    if (hasSnap) paint(snap, "snap");
+    else {
+      body.appendChild(stateBox(
+        "正在从云端拉取正文…",
+        SB.state() === "off" ? "云端直连不可用，先看本机快照。" : "走扩展内的 Node 服务直连云端，不用扫码。"
+      ));
+    }
+
+    fromCloud().catch(function (e) {
+      log("cloud/fail", e.message + (e.code ? " [" + e.code + "]" : ""));
+      if (hasSnap) return;            // 已经有快照在显示，失败就不打扰
+      fromLocal(function () {
+        if (!it.n) toast("没拉到正文，可以先「回到会话」看最新");
+      });
     });
   }
 
@@ -2506,6 +2894,34 @@
   document.getElementById("statsBtn").onclick = openStats;
   document.getElementById("syncBtn").onclick = syncLive;
 
+  document.getElementById("fillAllBtn").onclick = function () {
+    if (SB.state() !== "ok") {
+      toast("云端直连不可用：本次部署没有 service，或它没起来");
+      return;
+    }
+    var todo = DATA.items.filter(function (it) { return !(it.n > 0); });
+    if (!todo.length) { toast("所有会话都有正文了"); return; }
+    toast("开始补 " + todo.length + " 条，可以继续用面板");
+    startFill(todo, { label: "从云端补正文" });
+  };
+
+  document.getElementById("dPull").onclick = function () {
+    var it = state.current;
+    if (!it) return;
+    if (SB.state() !== "ok") { toast("云端直连不可用"); return; }
+    toast("正在从云端拉…");
+    SB.fetchBody(it.id, { force: true }).then(function (r) {
+      var shard = r.shard || r;
+      shard.id = it.id;
+      acceptShard(it, shard, "cloud");
+      toast("已拉到 " + (shard.messages || []).length + " 条 · 云端最新");
+      openDetail(it.id);
+      render();
+    }).catch(function (e) {
+      toast("拉取失败：" + e.message);
+    });
+  };
+
   document.getElementById("dWeb").onclick = function () {
     if (!state.current) return;
     openExternal(webUrl(state.current.id));
@@ -2532,6 +2948,12 @@
   };
   document.getElementById("dMd").onclick = function () {
     if (!state.current) return;
+    var s = SESSIONS[state.current.id];
+    if (s && (s.messages || []).length) {
+      var md0 = toMarkdown(s);
+      copy(md0, "已复制 " + md0.length + " 字符 Markdown");
+      return;
+    }
     loadSession(state.current.id, function (err, shard) {
       if (err || !shard) return toast("这条会话没有本地正文");
       var md = toMarkdown(shard);
@@ -2701,6 +3123,10 @@
       out.push("宿主通道  : " + (g && g.port
         ? ("MessagePort" + (g.ready ? "（ready 已确认）" : "（ready 未确认）"))
         : "未建立（只剩浏览器兜底）"));
+      var si = SB.info();
+      out.push("云端直连  : " + (SB.state() === "ok"
+        ? ("service v" + si.version + " · pid " + si.pid + " · " + si.cache + " 条缓存 · via " + SB.style())
+        : SB.state() === "off" ? ("不可用 —— " + SB.error()) : "检测中…"));
       if (g && g.lines && g.lines.length) out.push("guest     : " + g.lines.join(" | "));
       setDiagHeader(out);
     }
@@ -2741,6 +3167,11 @@
         Bridge.handshake(800).then(function () {
           log("bridge", "ok via " + Bridge.via());
           refreshDiag();
+          // 云端直连探活：拿不到 service 就永久降级，面板行为回到 1.8.0
+          SB.probe().then(function () {
+            refreshDiag();
+            setTimeout(prefetchRecent, 600);
+          }).catch(function () { refreshDiag(); });
           return Bridge.invoke("wb:config:get", ["theme"], 3000).then(function (t) {
             var v = typeof t === "string" ? t : (t && (t.theme || t.mode));
             if (v === "dark" || v === "light") {

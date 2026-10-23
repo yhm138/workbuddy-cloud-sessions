@@ -230,6 +230,7 @@
     background: var(--bg-soft); color: var(--fg);
   }
   .modal .acts button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .modal .acts button[hidden] { display: none; }
 
   /* ---------- 全屏面板 ---------- */
   #detailView, #statsView { display: none; }
@@ -690,6 +691,19 @@
 </footer>
 <div class="toast" id="toast"></div>
 
+<div class="modal" id="snapModal" hidden>
+  <div class="card">
+    <h3 id="snapTitle">本机快照，可能不是最新</h3>
+    <p class="sub" id="snapSub">—</p>
+    <p class="tip" id="snapTip">—</p>
+    <div class="acts">
+      <button id="snapClose">先看快照</button>
+      <button id="snapWeb">网页版</button>
+      <button id="snapGo" class="primary">回到会话</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="fillModal" hidden>
   <div class="card">
     <h3>上下文已经填进 WorkBuddy 的输入框了</h3>
@@ -713,7 +727,7 @@
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.4.0";
+  var PAGE_VERSION = "1.5.0";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -1813,8 +1827,8 @@
     card.appendChild(kv);
 
     var acts = el("div", "acts wide");
-    var back = el("button", "primary", "回到会话");
-    back.onclick = function () { openSessionInClient(id); };
+    var back = el("button", "primary", needWeb(it) ? "在网页版打开" : "回到会话");
+    back.onclick = function () { goSession(it); };
     acts.appendChild(back);
     card.appendChild(acts);
 
@@ -1836,9 +1850,11 @@
     };
     subs.appendChild(pull);
 
-    var web = el("button", null, "网页版");
-    web.onclick = function () { openExternal(WEB + "/app/conversation/" + id); };
-    subs.appendChild(web);
+    if (!needWeb(it)) {
+      var web = el("button", null, "网页版");
+      web.onclick = function () { openExternal(WEB + "/app/conversation/" + id); };
+      subs.appendChild(web);
+    }
 
     card.appendChild(subs);
 
@@ -1846,16 +1862,80 @@
     return box;
   }
 
+  /**
+   * 进详情就弹一次：这条正文只是本机快照。
+   * 用 sessionStorage 按会话去重，同一个面板会话里不重复打扰。
+   */
+  function maybeWarnSnapshot(it, id, n) {
+    var key = "wbcs.snap." + id;
+    try { if (sessionStorage.getItem(key)) return; } catch (e) {}
+    try { sessionStorage.setItem(key, "1"); } catch (e) {}
+
+    var mp = it.origin === "workbuddy-mp" || it.origin === "workbuddy-app";
+    var t = relTime(it.ts);
+
+    document.getElementById("snapSub").textContent =
+      "面板里是 " + n + " 条本机快照" + (t ? "（" + t.abs + "）" : "") +
+      "，不一定是最新。";
+
+    document.getElementById("snapTip").textContent = mp
+      ? "这类会话来自小程序 / 手机端，客户端打开时可能显示「暂无对话记录」，那就用网页版看。"
+      : "客户端打开的是同一条会话，历史完整，还能接着发消息。";
+
+    var m = document.getElementById("snapModal");
+    m.hidden = false;
+
+    var goBtn = document.getElementById("snapGo");
+    var webBtn = document.getElementById("snapWeb");
+    if (mp) {
+      /* 客户端这条路是空的，只留网页版 */
+      goBtn.textContent = "在网页版打开";
+      goBtn.onclick = function () {
+        m.hidden = true;
+        openExternal(WEB + "/app/conversation/" + id);
+      };
+      webBtn.hidden = true;
+    } else {
+      goBtn.textContent = "回到会话";
+      goBtn.onclick = function () {
+        m.hidden = true;
+        openSessionInClient(id);
+      };
+      webBtn.hidden = false;
+      webBtn.onclick = function () {
+        m.hidden = true;
+        openExternal(WEB + "/app/conversation/" + id);
+      };
+    }
+    document.getElementById("snapClose").onclick = function () { m.hidden = true; };
+    m.onclick = function (ev) { if (ev.target === m) m.hidden = true; };
+  }
+
+  /**
+   * 小程序 / 手机端的会话，客户端打开只有壳（实测「暂无对话记录」），
+   * 因为 sourceModel 把 workbuddy-mp 映射成 miniprogram，客户端没有对应的回放通道。
+   * 这类只给网页版，别让人点了空会话还以为丢了记录。
+   */
+  function needWeb(it) {
+    return !!it && (it.origin === "workbuddy-mp" || it.origin === "workbuddy-app");
+  }
+
+  function goSession(it) {
+    if (!it) return;
+    if (needWeb(it)) { openExternal(WEB + "/app/conversation/" + it.id); return; }
+    openSessionInClient(it.id);
+  }
+
   /** 正文顶部的快照说明：一句话交代这不是最新，并给一个直达入口 */
   function snapNote(it, id, n) {
     var d = el("div", "snap");
     d.appendChild(el("b", null, "本机快照"));
     d.appendChild(document.createTextNode(" · 可能不是最新。"));
-    var a = el("a", "lnk", "看最新的 →");
+    var a = el("a", "lnk", needWeb(it) ? "网页版 →" : "看最新的 →");
     a.href = "#/s/" + id;
     a.onclick = function (ev) {
       ev.preventDefault();
-      openSessionInClient(id);
+      goSession(it);
     };
     d.appendChild(a);
     return d;
@@ -1993,12 +2073,12 @@
     row.appendChild(body);
 
     var go = el("button", "row-go", "");
-    go.title = "回到会话（在客户端打开这条会话）";
-    go.setAttribute("aria-label", "回到会话");
+    go.title = needWeb(it) ? "在网页版打开（客户端里没有这类会话的历史）" : "回到会话（在客户端打开这条会话）";
+    go.setAttribute("aria-label", go.title);
     go.innerHTML = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 3.5H13V7"/><path d="M13 3.5 7.4 9.1"/><path d="M11.6 9.6v3.2H3.2V4.4h3.2"/></svg>';
     go.onclick = function (ev) {
       ev.stopPropagation();
-      openSessionInClient(it.id);
+      goSession(it);
     };
     row.appendChild(go);
     return row;
@@ -2171,6 +2251,13 @@
       (it.n ? it.n + " 条" : "正文未缓存");
     setFavLabel(isFav(id));
     setComposer(id, false);
+    var goBtn = document.getElementById("dChat");
+    if (goBtn) {
+      goBtn.textContent = needWeb(it) ? "网页版" : "回到会话";
+      goBtn.title = needWeb(it)
+        ? "这条来自小程序 / 手机端，客户端里没有历史，改用网页版"
+        : "在客户端里打开这条会话本身（同一个 Session），接着在它里面聊";
+    }
     location.hash = "#/s/" + id + (jumpIdx != null ? "/" + jumpIdx : "");
 
     var body = document.getElementById("dBody");
@@ -2202,6 +2289,7 @@
       }
       body.appendChild(snapNote(it, id, got));
       body.appendChild(renderThread(shard, jumpIdx));
+      maybeWarnSnapshot(it, id, got);
       setComposer(id, (shard.messages || []).length > 0);
       if (findQ && findQ.length >= 1) {
         document.getElementById("findbar").classList.add("on");
@@ -2453,7 +2541,7 @@
   };
 
   document.getElementById("dChat").onclick = function () {
-    if (state.current) openSessionInClient(state.current.id);
+    if (state.current) goSession(state.current);
   };
   document.getElementById("dFill").onclick = continueChat;
 
@@ -2557,6 +2645,8 @@
     var typing = tag === "input" || tag === "select" || tag === "textarea";
 
     if (ev.key === "Escape" && !typing) {
+      var sm = document.getElementById("snapModal");
+      if (sm && !sm.hidden) { sm.hidden = true; return; }
       var dm2 = document.getElementById("dMenu");
       if (dm2 && !dm2.hidden) { closeMenu(); return; }
       var fm = document.getElementById("fillModal");

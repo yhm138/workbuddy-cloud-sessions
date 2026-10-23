@@ -374,6 +374,37 @@ Xv.next({ sidebarUrl: '', contentBlocks, source });  // 推给主窗口 composer
 
 语义是**填入输入框，不自动发送**（`wb:message:send` 才会发）。
 
+### 6.2.0 深链不是万能的：小程序来源的会话打开是空壳
+
+`workbuddy://chat/<id>` 对 `conversation_origin='agents'` 的会话有效（标题、正文、续聊都正常），
+但对 `workbuddy-mp` **无效** —— 实测 `2064638374820519936`：
+
+- 深链后客户端**正确跳到了这条会话**（标题对得上）；
+- 正文区显示「**暂无对话记录**」，输入框是空的；
+- 同一个 id 在 Web 端有完整历史，扩展快照里也有 23 条。
+
+原因在客户端的来源映射（`renderer/assets/*.js`）：
+
+```js
+origin: t === 'workbuddy-mp'  ? 'miniprogram'
+      : t === 'workbuddy-app' ? 'mobile'
+      :                         'desktop'
+```
+
+它把小程序会话标成 `miniprogram`、手机端标成 `mobile`，而客户端只对 `desktop`（agents）
+有完整的云端回放通道 —— 这也和 `DesktopCloudTaskEntry` 被关掉是同一件事：云会话支持没做完。
+
+**所以扩展 v1.5.0 起按来源分流**：
+
+| origin | 主入口 |
+| --- | --- |
+| `agents` | `workbuddy://chat/<id>` 回到会话 |
+| `workbuddy-mp` / `workbuddy-app` | Web 端 `/app/conversation/<id>` |
+
+列表行尾按钮、详情页顶栏、落地卡、快照弹窗四处都按这个走，避免点了空会话还以为记录丢了。
+
+---
+
 ### 6.2.1 想「回到原会话继续」就得用深链，别搬上下文
 
 `workbuddy://chat/<conversationId>` 就是「打开这条会话」。两处证据：

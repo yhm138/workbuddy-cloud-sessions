@@ -503,6 +503,65 @@ service 里既有 `https`（SSE 无 CORS 限制），也能 `wb.invoke('wb:http:
 
 ---
 
+## 6.5 打开 `DesktopCloudTaskEntry`：把云端会话放回原生侧栏
+
+这条比扩展本身更根本 —— 客户端的侧栏本来就能显示云端会话，只是被一个打包期写死的开关挡住了。
+
+### 三处硬编码
+
+在 `app.asar` 里搜 `DesktopCloudTaskEntry`，只有 5 处命中，其中 3 处是"关"：
+
+| 位置 | 代码 | 作用 |
+| --- | --- | --- |
+| `renderer/assets/artifact-slot-panel-*.js` | `createProductFeatureHook({featureKey:'DesktopCloudTaskEntry',resolve:()=>!1})` | 侧栏/搜索读的总开关 |
+| `main/server.js` | `desktopCloudTaskEntryEnabled=()=>!1` | 全局搜索 `CloudTaskSearcher` + 会话元数据快照 |
+| `renderer/assets/contexts-*.js` | `desktopCloudTaskEntryEnabled:m=!1` | 侧栏分组参数的默认值 |
+
+`resolve` 是 `() => !1`，**不接受任何入参** —— 所以改账号配置、改 `product.json`、等服务端灰度都没用，
+它压根不读配置。只能改字面量。
+
+真正拦人的是 `shouldAddConversationOptimistically()`：
+
+```js
+function shouldAddConversationOptimistically(e, t) {
+  return !(t.isLocalDesktop && !t.desktopCloudTaskEntryEnabled && e.transport === 'cloud'
+        || isOtherClientCloudLocalOriginMirror(e) || hasQuickAskConversationTag(e.tags))
+}
+```
+
+桌面端 + 开关关 + `transport === 'cloud'` → 云端会话不进侧栏。本地 SQLite 的 `sessions` 表里
+其实一直有这些记录（`where transport='cloud'`），列表数据是现成的，纯展示层被挡住。
+
+### 怎么改
+
+`!1` → `!0`，三者等长，直接原地覆盖字节：
+
+```bash
+python tools/patch-cloud-task-entry.py --check     # 看现状
+python tools/patch-cloud-task-entry.py --apply     # 打补丁
+python tools/patch-cloud-task-entry.py --restore   # 用 app.asar.wbbak 还原
+```
+
+前提与边界：
+
+- `WorkBuddy.exe` 里查不到 `EnableEmbeddedAsarIntegrityValidation`，即**没有 asar 完整性校验**，
+  改字节不会被判定篡改（`OnlyLoadAppFromAsar` 只是限制加载来源，不影响内容）。
+- 替换前后文件长度一致，asar header 里的 offset/size 全部有效，不用重新打包。
+- 验证方式：和 `app.asar.wbbak` 逐字节比对，应当**只有 3 个字节不同**。
+- 客户端必须「托盘 → 退出」重启，renderer bundle 才会重新加载。
+- 客户端升级会整包替换 `app.asar`，补丁失效，需要重打。
+
+### 打开之后是什么样
+
+- 侧栏出现「云端任务 / Cloud Tasks」分组（i18n key `conversation.cloudTasks` 早就在包里）
+- 点进去就是原生会话页 —— 和「回到会话」完全同一套界面、同一套 ACP 通道
+- 全局搜索里多出 `cloud-task` 这个 searcher（`CloudTaskSearcher`）
+
+也就是说：**真正的融合不是把网页塞进 iframe，而是让原生 UI 认这些会话**。
+扩展的定位随之变成补充：全量快照、离线浏览、Markdown 导出、跨来源统计分析。
+
+---
+
 ## 7. 已知限制
 
 - 正文默认是**抓取时的快照**；新增会话由面板就地拉取（6.4 的两条通道），两条都不通时才需要 `wbcs fetch` 增量补

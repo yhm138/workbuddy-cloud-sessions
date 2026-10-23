@@ -571,7 +571,7 @@
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.1.0";
+  var PAGE_VERSION = "1.2.0";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -1101,14 +1101,79 @@
    *   3) 都不行 → 详情页给「网页版 / 回到会话」兜底
    * 每一步的返回结构都会打到诊断区，失败原因一眼能看到。
    */
-  function ipc(channel, args, timeout) {
-    if (typeof window.__wbInvoke === "function") {
-      return Promise.race([
-        window.__wbInvoke(channel, args),
-        new Promise(function (_, rej) { setTimeout(function () { rej(new Error("超时：" + channel)); }, timeout || 25000); })
-      ]);
-    }
-    return Bridge.invoke(channel, args, timeout);
+  /* 宿主 __wbInvoke(channel, second, ...rest) 里，second 会被当成 subject 提示剥掉，
+     真正的 payload 从第三个参数开始；但老版本是 (channel, args)。两种都试，
+     谁先给出正常结果就记住谁（存 localStorage，下次直接用）。 */
+  var WB_STYLE = null;
+  try { WB_STYLE = localStorage.getItem("wbcs.wbStyle") || null; } catch (e) {}
+  var WB_DEAD = false; // 三种形态全废 → 本次会话不再尝试，直接走 ACP
+
+  function withTimeout(p, ms, label) {
+    return Promise.race([p, new Promise(function (_, rej) {
+      setTimeout(function () { rej(new Error("超时 " + label)); }, ms);
+    })]);
+  }
+
+  function wbRaw(style, channel, args) {
+    var fn = window.__wbInvoke;
+    if (typeof fn !== "function") return Promise.reject(new Error("__wbInvoke 不可用"));
+    if (style === "rest") return fn.apply(null, [channel, null].concat(args));
+    if (style === "flat") return fn.apply(null, [channel].concat(args));
+    return fn(channel, args);
+  }
+
+  function looksOk(v) {
+    if (!v || typeof v !== "object") return false;
+    if (v.__wbError) return false;
+    if (Object.keys(v).length <= 2 && (v.code || v.message)) return false;
+    return true;
+  }
+
+  function wbCall(channel, args, timeout) {
+    args = args || [];
+    timeout = timeout || 8000;
+    if (WB_STYLE) return withTimeout(Promise.resolve(wbRaw(WB_STYLE, channel, args)), timeout, channel);
+    var styles = ["rest", "flat", "arg2"];
+    return new Promise(function (resolve, reject) {
+      var left = styles.length, errs = [];
+      styles.forEach(function (st) {
+        var p;
+        try { p = Promise.resolve(wbRaw(st, channel, args)); } catch (e) { p = Promise.reject(e); }
+        withTimeout(p, timeout, channel + "/" + st).then(function (v) {
+          if (looksOk(v)) {
+            if (!WB_STYLE) {
+              WB_STYLE = st;
+              try { localStorage.setItem("wbcs.wbStyle", st); } catch (e) {}
+              log("wb/style", "选定 " + st + "（" + channel + "）");
+            }
+            resolve(v);
+            return;
+          }
+          errs.push(st + ":" + (v && v.__wbError ? (v.code || v.message || "报错") : "空结果"));
+          if (--left === 0) reject(new Error(errs.join(" | ")));
+        }, function (e) {
+          errs.push(st + ":" + e.message);
+          if (--left === 0) reject(new Error(errs.join(" | ")));
+        });
+      });
+    });
+  }
+
+  /** wb:conversations:requests 的一页 → shard */
+  function requestsToShard(page, id) {
+    var items = page && (page.items || page.requests);
+    if (!Array.isArray(items) || !items.length) return null;
+    var msgs = [], stats = { total: 0, user: 0, assistant: 0, thought: 0, tool: 0 };
+    function push(m, k) { msgs.push(m); stats.total++; if (k) stats[k] = (stats[k] || 0) + 1; }
+    items.forEach(function (r) {
+      if (!r || typeof r !== "object") return;
+      var ut = textOfNode(r.userMessage && r.userMessage.content);
+      if (ut) push({ r: "user", t: String(ut).slice(0, 24000), k: "", n: "", s: "", i: "", o: "" }, "user");
+      var at = textOfNode(r.assistantMessage && r.assistantMessage.content);
+      if (at) push({ r: "assistant", t: String(at).slice(0, 24000), k: "", n: "", s: "", i: "", o: "" }, "assistant");
+    });
+    if (!msgs.length) return null;
+    return { id: id, ok: true, title: null, stats: stats, messages: msgs, fetchedAt: Date.now(), live: true };
   }
 
   function shapeOf(v) {
@@ -1196,36 +1261,26 @@
     };
   }
 
-  /* 客户端会话服务的入参形态没文档，三种都试，谁先给出可解析的结果就用谁 */
-  function convByVariants(it) {
-    var variants = [[it.id], { conversationId: it.id }, { id: it.id }, it.id];
-    return new Promise(function (resolve, reject) {
-      (function step(i) {
-        if (i >= variants.length) return reject(new Error("会话服务没有可用结果"));
-        ipc("wb:conversations:get", variants[i], 25000).then(function (conv) {
-          log("conv/get", "v" + i + " " + shapeOf(conv));
-          var shard = convToShard(conv, it.id);
-          if (shard) return resolve(shard);
-          var sample = "";
-          try { sample = JSON.stringify(conv).slice(0, 200); } catch (e) {}
-          log("conv/get", "v" + i + " 结构未识别 " + sample);
-          step(i + 1);
-        }).catch(function (e) {
-          log("conv/get", "v" + i + " fail " + (e.code ? "[" + e.code + "] " : "") + e.message);
-          step(i + 1);
-        });
-      })(0);
-    });
-  }
-
+  /* 拉正文：先走客户端自己的会话数据源（和「回到会话」同一条路，快、准），
+     wb 通道整条废掉时才退回 ACP 直连。 */
   function pullOne(it) {
     it.pull = "busy";
     render();
-    return convByVariants(it).then(function (shard) {
-      acceptShard(it, shard);
-      return true;
-    }).catch(function (e) {
-      log("conv/get", "放弃：" + e.message);
+    var viaWb = WB_DEAD
+      ? Promise.reject(new Error("wb 通道本次已判定不可用"))
+      : wbCall("wb:conversations:requests", [it.id], 9000).then(function (page) {
+          log("requests", "ok " + shapeOf(page));
+          var shard = requestsToShard(page, it.id);
+          if (!shard) throw new Error("requests 里没有可解析的消息");
+          acceptShard(it, shard);
+          return true;
+        }).catch(function (e) {
+          if (/超时|不可用|PERMISSION|NOT_FOUND|denied/i.test(e.message)) WB_DEAD = true;
+          throw e;
+        });
+
+    return viaWb.catch(function (e) {
+      log("requests", "fail " + e.message);
       return pullViaAcp(it).catch(function (e2) {
         log("acp", "fail " + (e2.code ? "[" + e2.code + "] " : "") + e2.message);
         it.pull = "fail";
@@ -1251,7 +1306,7 @@
       if (!d.link || !d.token) throw new Error("没有拿到 link/token");
       var link = String(d.link).replace(/^http:\/\//, "https://");
       log("acp/link", link.replace(/\?.*$/, ""));
-      return ssrFetch(link, d.token, d.sessionId || it.id, 6000).then(function (events) {
+      return ssrFetch(link, d.token, d.sessionId || it.id, 4000).then(function (events) {
         var shard = eventsToShard(events, it.id);
         if (!shard) throw new Error("SSE 里没有可解析的事件");
         acceptShard(it, shard);
@@ -1321,7 +1376,7 @@
       }).catch(function (e) {
         finish(new Error("SSE 建连失败：" + (e && e.message)));
       });
-      setTimeout(function () { finish(new Error("SSE 超时")); }, 45000);
+      setTimeout(function () { finish(new Error("SSE 超时")); }, 12000);
     });
   }
 
@@ -1375,7 +1430,7 @@
     return { id: id, ok: true, title: title, stats: stats, messages: messages, fetchedAt: Date.now(), live: true };
   }
 
-  /** 逐条拉，2 个 worker 串行取队列，避免一次打爆宿主 */
+  /** 逐条拉，4 个 worker 取队列（列表早已渲染，正文后台补齐） */
   function pullBodies(list) {
     var queue = list.slice();
     var ok = 0, fail = 0, running = 0;
@@ -1398,7 +1453,7 @@
       });
     }
     render();
-    for (var i = 0; i < 2; i++) worker();
+    for (var i = 0; i < 4; i++) worker();
   }
 
   /* ================= 分片加载 ================= */

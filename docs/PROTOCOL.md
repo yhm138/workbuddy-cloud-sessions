@@ -501,6 +501,41 @@ service 里既有 `https`（SSE 无 CORS 限制），也能 `wb.invoke('wb:http:
 等于把 `src/acp.js` 那套完整搬进客户端。代价是 manifest 要声明 service、宿主要能 fork 成功，
 属于下一版的事。
 
+**④ 结论（2026-10-23 实测）：不是参数问题，是数据源问题**
+
+查 `edge-sync/server/index.cjs` 的 `REMOTE_WB_METHOD_BINDINGS`：
+
+```js
+{ channel: "wb:conversations:requests",
+  localConversationIdArg: 0,          // 第一个参数就是 conversationId
+  activatesConversationStream: true,  // 调用会激活会话流
+  projectResult: (v, _i, ctx) => projectRemoteRequestsPage(v, ctx) }
+```
+
+它**没有 `prepareArgs`**，`projectResult` 只是把 `items` 逐条投影（`projectRemoteRequest`），
+原样透传其余字段。也就是说这个通道读的是**本机 daemon 的历史**，不是去云端现拉。
+
+而 cloud 会话的消息根本不在本机：
+
+- `~/.workbuddy/workbuddy.db` 只有 `sessions` 等 12 张表，**没有任何消息表**；
+- 本机唯一有的，是客户端**上次自己打开该会话时**落下的片段；
+- 客户端打开会话才走云端 ACP 回放全量 —— 这正是「回到会话」永远能看到最新内容的原因。
+
+实测两条 cloud 会话：
+
+| 会话 | 现象 | 真相 |
+| --- | --- | --- |
+| `2112531641764274176` | 索引 22 条，实际只渲染 8 轮，尾部缺失 | 快照是半截的 |
+| `2113427660396220416` | 一条都读不到，`requests` 返回空 | 本机从未打开过它 |
+
+所以「同步很慢还拉不到」不是超时或并发问题，**是这条路径对 cloud 会话本来就不存在**。
+v1.4.0 起把面板定位改成**索引层**：
+
+- 列表行尾常驻「↗」，一步 `workbuddy://chat/<id>` 回原会话（不再先进详情）；
+- 正文拿不到时不再提供「重试阅读器」，改成一键「回到会话」的落地卡；
+- 正文有快照时顶部挂一条「本机快照 · 可能不是最新」的说明，不让人误以为看到了全部；
+- 后台补快照收敛到最近 30 条、并发 2、失败静默（原来全量 4 并发会空转几十秒）。
+
 ---
 
 ## 6.5 打开 `DesktopCloudTaskEntry`：把云端会话放回原生侧栏
@@ -551,6 +586,20 @@ python tools/patch-cloud-task-entry.py --restore   # 用 app.asar.wbbak 还原
 - 客户端必须「托盘 → 退出」重启，renderer bundle 才会重新加载。
 - 客户端升级会整包替换 `app.asar`，补丁失效，需要重打。
 
+### 实测结果：三处全开会启动闪退（已还原）
+
+02:30 打补丁后，客户端重启直接闪退，用 `restore-client-patch.bat` 还原才恢复。
+三个字节都合法（等长替换、asar header 无损），所以不是包损坏，是**打开了未走通的代码路径**：
+
+- 侧栏一旦认云端会话，`shouldAddConversationOptimistically` 放行 → 走云端的
+  `readVisibleCloudConversationMetas`、云端分组渲染、`CloudTaskSearcher` 搜索；
+- 这些路径在打包时被裁掉/未联调，运行时缺少依赖（很可能缺 daemon 侧的云端会话列表接口），
+  renderer 直接抛错 → 白屏/闪退；
+- `main/server.js` 那处改的是主进程侧，崩了更难恢复。
+
+**结论：这条路依赖客户端未发布的能力，不具备可维护性**，不建议继续折腾。
+只改 renderer 两处、不改 `main/server.js` 是否更稳，尚未验证；即便成立，升级即失效。
+
 ### 打开之后是什么样
 
 - 侧栏出现「云端任务 / Cloud Tasks」分组（i18n key `conversation.cloudTasks` 早就在包里）
@@ -564,7 +613,9 @@ python tools/patch-cloud-task-entry.py --restore   # 用 app.asar.wbbak 还原
 
 ## 7. 已知限制
 
-- 正文默认是**抓取时的快照**；新增会话由面板就地拉取（6.4 的两条通道），两条都不通时才需要 `wbcs fetch` 增量补
+- **cloud 会话的正文，面板永远只能看到快照**（详见 6.4 ④）。所谓「拉最新」在面板内不存在，
+  唯一可靠的方式是 `workbuddy://chat/<id>` 回到客户端 —— 那边才是走云端 ACP 全量回放的
+- 正文默认是**抓取时的快照**；快照靠 `wbcs fetch` 增量补，或客户端自己打开该会话时由宿主落下
 - 单条会话回放靠空闲超时收尾，超大会话（>5000 事件）可能被截断，可调 `--idle` / `--max`
 - 定时任务类会话通常只有任务定义、没有对话记录，属于数据本身如此
 - Windows / macOS / Linux 的扩展目录都做了探测，但只在 Windows 上实测过

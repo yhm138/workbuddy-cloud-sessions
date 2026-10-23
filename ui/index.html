@@ -152,6 +152,19 @@
     border-radius: var(--r-lg); cursor: pointer;
   }
   .row:hover { background: var(--bg-hover); }
+  /* 行尾「回到会话」直达：一步进原 Session，不用先进详情 */
+  .row-go {
+    flex: 0 0 auto; align-self: center;
+    width: 26px; height: 26px; padding: 0; margin-left: 2px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: none; background: transparent; color: var(--fg-mute);
+    border-radius: 8px; cursor: pointer;
+    opacity: .34; transition: opacity .12s, background .12s, transform .08s;
+  }
+  .row:hover .row-go { opacity: 1; }
+  .row-go:hover { background: var(--bg-active); color: var(--fg); opacity: 1; }
+  .row-go:active { transform: scale(.93); }
+  @media (hover: none) { .row-go { opacity: .5; } }
   .row.sel { background: var(--bg-active); }
   .dot { width: 6px; height: 6px; border-radius: 50%; margin-top: 7px; flex: 0 0 auto; background: var(--fg-mute); }
   .dot[data-o="agents"] { background: var(--badge-web); }
@@ -330,6 +343,23 @@
   .uncached .acts button { height: 28px; padding: 0 12px; font-size: 12.5px; }
   .uncached .hint { margin-top: 12px; font-size: 11.5px; color: var(--fg-mute); line-height: 1.65; }
   .uncached code { font: 11px ui-monospace, Consolas, monospace; background: var(--bg-soft); padding: 1px 5px; border-radius: 4px; }
+  .uncached .acts.wide { display: block; }
+  .uncached .acts.wide button { width: 100%; height: 34px; font-size: 13px; font-weight: 500; }
+  .uncached .acts.sub { margin-top: 8px; }
+  .uncached .acts.sub button { height: 26px; font-size: 12px; color: var(--fg-dim); }
+
+  /* 快照说明条：明确「这里不是最新」，避免误以为面板能看全 */
+  .snap {
+    display: flex; align-items: baseline; gap: 4px;
+    margin: 10px 12px 2px; padding: 6px 9px;
+    font-size: 11.5px; line-height: 1.5; color: var(--fg-dim);
+    background: var(--bg-soft); border-radius: 8px;
+  }
+  .snap b { font-weight: 600; color: var(--fg); }
+  .snap .lnk { color: var(--link); cursor: pointer; text-decoration: none; white-space: nowrap; }
+  .snap .lnk:hover { text-decoration: underline; }
+
+  #dChat.go { flex: 0 0 auto; height: 26px; padding: 0 9px; margin-left: 1px; font-size: 12px; font-weight: 500; }
 
   /* 版本自检条：宿主清单是启动时快照的，热部署后会短暂不一致 */
   .vbar { display: flex; gap: 10px; align-items: flex-start; margin: 10px 12px 2px; padding: 8px 10px;
@@ -355,10 +385,11 @@
   body[data-view="detail"] > footer,
   body[data-view="stats"] > footer { display: none; }
   #detailView #dBody { padding-bottom: 12px; }
+  #dBody.with-cmp .thread { padding-bottom: 78px; }
 
   #detailView .bar {
-    flex-direction: row; align-items: center; gap: 2px;
-    padding: 6px 6px 6px 2px; min-height: 46px;
+    flex-direction: row; align-items: center; gap: 4px;
+    padding: 6px 8px 6px 2px; min-height: 46px;
   }
   #detailView .bar .col { padding-right: 2px; }
   #detailView .bar .dt { font-size: 13.5px; font-weight: 600; letter-spacing: -.01em; }
@@ -611,11 +642,11 @@
         <div class="dt" id="dTitle">—</div>
         <div class="ds" id="dSub">—</div>
       </div>
-      <button id="dFind" class="icon" title="会话内查找（Ctrl+F）">⌕</button>
+      <button id="dFind" class="icon" title="会话内查找（Ctrl+F）" aria-label="查找"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="7" cy="7" r="4.1"/><path d="M10.1 10.1 13.4 13.4"/></svg></button>
+      <button id="dChat" class="primary go" title="在客户端里打开这条会话本身（同一个 Session），接着在它里面聊">回到会话</button>
       <div class="menu-wrap">
         <button id="dMore" class="icon" title="更多" aria-haspopup="true" aria-expanded="false">⋯</button>
         <div class="menu" id="dMenu" hidden>
-          <button id="dChat" data-close><span>回到会话</span><em>在客户端里打开这条会话</em></button>
           <button id="dFill" data-close><span>填上下文</span><em>把历史塞进当前输入框</em></button>
           <button id="dWeb" data-close><span>在网页版打开</span></button>
           <button id="dMd" data-close><span>复制为 Markdown</span></button>
@@ -682,7 +713,7 @@
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.3.0";
+  var PAGE_VERSION = "1.4.0";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -1542,16 +1573,20 @@
     return { id: id, ok: true, title: title, stats: stats, messages: messages, fetchedAt: Date.now(), live: true };
   }
 
-  /** 逐条拉，4 个 worker 取队列（列表早已渲染，正文后台补齐） */
+  /**
+   * 后台补快照。
+   * cloud 会话的正文只在本机留片段，全量拉既慢又大多失败，
+   * 所以只补最近 30 条、并发 2、失败不打扰（列表已标「云端」）。
+   */
   function pullBodies(list) {
-    var queue = list.slice();
+    var queue = list.slice(0, 30);
     var ok = 0, fail = 0, running = 0;
     function worker() {
       var it = queue.shift();
       if (!it) {
         if (!running) {
           log("pull/done", "ok " + ok + " / fail " + fail);
-          toast(ok ? "正文已拉取 " + ok + " 条" + (fail ? "，失败 " + fail + " 条" : "") : "正文没拉下来，详情页可改用网页版查看", 3000);
+          if (ok) toast("已补 " + ok + " 条快照", 1800);
           render();
         }
         return;
@@ -1565,7 +1600,7 @@
       });
     }
     render();
-    for (var i = 0; i < 4; i++) worker();
+    for (var i = 0; i < 2; i++) worker();
   }
 
   /* ================= 分片加载 ================= */
@@ -1758,61 +1793,72 @@
   }
 
   /**
-   * 没有正文时的落地卡片：不是死路，三条活路都摆出来。
-   * 拉取通道见 pullOne()（客户端会话服务 → ACP 直连）。
+   * 正文拿不到时的落地卡。
+   * cloud 会话的消息存在云端，客户端只有自己打开会话时才回放，面板读不到。
+   * 所以这里不做「重试阅读器」，只做一件事：把人送回去。
    */
   function uncachedCard(it, id) {
     var box = el("div", "uncached");
     var card = el("div", "card2");
-    card.appendChild(el("div", "ttl", "这条会话的正文还没在本机"));
+    card.appendChild(el("div", "ttl", "完整内容在客户端"));
 
     var txt = el("div", "txt");
-    txt.textContent = "客户端只在它自己打开对话时才会回放云端正文，扩展面板默认拿不到。" +
-      "点「拉取正文」会依次试客户端会话服务和云端 ACP 通道；两条都不通时，" +
-      "用「在网页版打开」或「回到会话」看到的是同一条会话，历史完整。";
+    txt.textContent = "这条会话的消息存在云端，面板只能读到本机已缓存的片段。" +
+      "点下面的按钮会直接打开同一个 Session，历史和后续对话都是最新的。";
     card.appendChild(txt);
 
     var t = relTime(it.ts);
     var kv = el("div", "kv");
-    kv.textContent = (t ? t.abs + " · " : "") + label(it.origin) + " · " + id;
+    kv.textContent = (t ? t.abs + " · " : "") + label(it.origin);
     card.appendChild(kv);
 
-    var acts = el("div", "acts");
-    var pull = el("button", "primary", "拉取正文");
-    pull.onclick = function () {
-      pull.disabled = true;
-      pull.textContent = "拉取中…";
-      pullOne(it).then(function (good) {
-        if (good) {
-          toast("已拉到 " + it.n + " 条消息");
-          openDetail(id);
-        } else {
-          pull.disabled = false;
-          pull.textContent = "再试一次";
-          toast("没拉到，可看诊断区的原因");
-          openDetail(id);
-        }
-      });
-    };
-    acts.appendChild(pull);
-
-    var web = el("button", null, "在网页版打开");
-    web.onclick = function () { openExternal(WEB + "/app/conversation/" + id); };
-    acts.appendChild(web);
-
-    var back = el("button", null, "回到会话");
+    var acts = el("div", "acts wide");
+    var back = el("button", "primary", "回到会话");
     back.onclick = function () { openSessionInClient(id); };
     acts.appendChild(back);
-
     card.appendChild(acts);
 
-    var hint = el("div", "hint");
-    hint.innerHTML = "离线兜底：<code>node bin/wbcs.js fetch --only " + esc(id) +
-      "</code> 抓完再 <code>build</code> + <code>deploy</code>，重启客户端即可长期缓存。";
-    card.appendChild(hint);
+    var subs = el("div", "acts sub");
+
+    var pull = el("button", null, "试读快照");
+    pull.onclick = function () {
+      pull.disabled = true;
+      pull.textContent = "读取中…";
+      pullOne(it).then(function (good) {
+        if (good) {
+          it.pull = "ok";
+          toast("读到 " + (it.n || 0) + " 条快照");
+        } else {
+          toast("云端没有可读快照");
+        }
+        openDetail(id);
+      });
+    };
+    subs.appendChild(pull);
+
+    var web = el("button", null, "网页版");
+    web.onclick = function () { openExternal(WEB + "/app/conversation/" + id); };
+    subs.appendChild(web);
+
+    card.appendChild(subs);
 
     box.appendChild(card);
     return box;
+  }
+
+  /** 正文顶部的快照说明：一句话交代这不是最新，并给一个直达入口 */
+  function snapNote(it, id, n) {
+    var d = el("div", "snap");
+    d.appendChild(el("b", null, "本机快照"));
+    d.appendChild(document.createTextNode(" · 可能不是最新。"));
+    var a = el("a", "lnk", "看最新的 →");
+    a.href = "#/s/" + id;
+    a.onclick = function (ev) {
+      ev.preventDefault();
+      openSessionInClient(id);
+    };
+    d.appendChild(a);
+    return d;
   }
 
   function stateBox(title, note, actions) {
@@ -1932,9 +1978,9 @@
     }
     name.appendChild(document.createTextNode(it.title));
     var idxEntry = INDEX[it.id];
-    if (it.pull === "busy") name.appendChild(el("span", "badge-n busy", "拉取中…"));
+    if (it.pull === "busy") name.appendChild(el("span", "badge-n busy", "拉取中"));
     else if (idxEntry || it.pull === "ok") name.appendChild(el("span", "badge-n ok", ((idxEntry && idxEntry.n) || it.n || 0) + " 条"));
-    else name.appendChild(el("span", "badge-n fail", "未缓存"));
+    else name.appendChild(el("span", "badge-n", "云端"));
     body.appendChild(name);
 
     var sub = el("div", "sub");
@@ -1945,6 +1991,16 @@
 
     row.appendChild(dot);
     row.appendChild(body);
+
+    var go = el("button", "row-go", "");
+    go.title = "回到会话（在客户端打开这条会话）";
+    go.setAttribute("aria-label", "回到会话");
+    go.innerHTML = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 3.5H13V7"/><path d="M13 3.5 7.4 9.1"/><path d="M11.6 9.6v3.2H3.2V4.4h3.2"/></svg>';
+    go.onclick = function (ev) {
+      ev.stopPropagation();
+      openSessionInClient(it.id);
+    };
+    row.appendChild(go);
     return row;
   }
 
@@ -2137,6 +2193,7 @@
       }
       log("shard", "ok " + (shard.messages || []).length + " msgs");
       body.textContent = "";
+      if ((shard.messages || []).length) body.appendChild(snapNote(it, id, shard.messages.length));
       body.appendChild(renderThread(shard, jumpIdx));
       setComposer(id, (shard.messages || []).length > 0);
       if (findQ && findQ.length >= 1) {
@@ -2430,6 +2487,8 @@
     var show = !!(on && id);
     c.hidden = !show;
     c.dataset.id = show ? id : "";
+    var db = document.getElementById("dBody");
+    if (db) db.classList.toggle("with-cmp", show);
     if (!show) { var i = document.getElementById("cw"); if (i) i.value = ""; }
   }
 

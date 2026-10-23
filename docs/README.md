@@ -14,7 +14,7 @@ README 负责「要不要用」，这里负责「怎么用、怎么改、为什�
 | 看每个版本改了什么 | [../CHANGELOG.md](../CHANGELOG.md) |
 | 参与开发 | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 
-## 四篇的分工
+## 分工
 
 ```
 README.md                 30 秒讲清价值，给下载链接
@@ -27,7 +27,7 @@ README.md                 30 秒讲清价值，给下载链接
 ```
 
 **PROTOCOL.md 是「事实」，ARCHITECTURE.md 是「设计」，REVERSE-ENGINEERING.md 是「过程」。**
-三者会有重叠，但视角不同：查字段去 PROTOCOL，改结构去 ARCHITECTURE，想知道「为什么不是另一种做法」去 REVERSE-ENGINEERING。
+几篇会有重叠，但视角不同：查字段去 PROTOCOL，改结构去 ARCHITECTURE，想知道「为什么不是另一种做法」去 REVERSE-ENGINEERING。
 
 ## 维护约定
 

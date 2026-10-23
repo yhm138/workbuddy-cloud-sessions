@@ -36,7 +36,7 @@ v1.9.1 修好了「缺少 id」，正文能拉到了，但用起来还有三处�
 | 空闲收尾 4000ms → 1400ms（`session/load` 回执后 700ms） | **~2.6s** |
 | 首帧到达即发 `initialize`（原来死等 600ms） | ~0.6s |
 | `initialize` 返回即发 `session/load`（原来死等 300ms） | ~0.3s |
-| keep-alive Agent：票据 / SSE / POST 复用连接 | ~0.2s（真机更明显） |
+| keep-alive Agent：SSE / initialize / session/load 复用同一条连接 | ~0.2s（真机更明显） |
 | `ts` 缓存：云端 `updatedAt` 没变就复用，30 分钟内不重放 | 重复打开 **≈0ms** |
 | 鼠标悬停 150ms 预取 + 进面板预热 TLS | 点开时基本已在缓存 |
 

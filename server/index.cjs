@@ -47,6 +47,7 @@ const inflight = new Map(); // id -> Promise
 const recent = []; // 诊断用环形日志
 const calls = []; // 最近几次方法调用的参数形状（排查参数约定用）
 let last = null; // 最近一次回放的耗时拆解（诊断面板显示用）
+let lastOrigin = ""; // 上次回放用的网关域名，预热时用得上
 
 let active = 0;
 const waiting = [];
@@ -167,6 +168,9 @@ async function fetchShard(wb, id, opts) {
   const t0 = Date.now();
   const ticket = await fetchTicket(wb, id);
   const tTicket = Date.now() - t0;
+  try {
+    lastOrigin = new URL(ticket.link).origin;
+  } catch {}
 
   /* 边回放边留一份「半成品」：面板可以边等边画，不用盯着转圈。
    * 只存事件引用，不复制内容，内存代价可以忽略。 */
@@ -465,10 +469,15 @@ function activate(wb) {
       };
     },
 
-    /** 预热：先把到网关的 TLS 连接建起来，第一次点会话就少一次握手 */
+    /**
+     * 预热：提前把 TLS 连接建好挂进 keep-alive 池。
+     * 优先预热上次回放用过的网关域名 —— SSE 和两个 POST 都在那个域上，复用最划算；
+     * 还没拉过任何会话时才退回 www（票据请求在宿主进程里，这一步帮不上它）。
+     */
     warm(...args) {
       record("warm", args);
-      return { ok: warmup(WEB), warmed: true };
+      const target = lastOrigin || WEB;
+      return { ok: warmup(target), warmed: true, target };
     },
 
     /** 清掉缓存（强制下一次走网络） */

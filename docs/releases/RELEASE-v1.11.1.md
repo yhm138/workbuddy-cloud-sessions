@@ -32,10 +32,10 @@ README 从头写过：顶部一句话讲清「桌面端看不见的会话」，�
 
 | 文档 | 面向 | 内容 |
 | --- | --- | --- |
-| [ARCHITECTURE.md](../ARCHITECTURE.md) | 改代码的人 | 三层职责、数据形状、service 契约、降级矩阵、性能预算表 |
-| [REVERSE-ENGINEERING.md](../REVERSE-ENGINEERING.md) | 好奇的人 | 一个写死的 `false` 引出的整条链路，包括那次把客户端搞闪退的尝试 |
-| [TROUBLESHOOTING.md](../TROUBLESHOOTING.md) | 使用者 | 症状 → 原因 → 处理，附诊断区逐行解释 |
-| [docs/README.md](../README.md) | 所有人 | 文档地图：想干什么 → 读哪篇 |
+| [ARCHITECTURE.md](https://github.com/yhm138/workbuddy-cloud-sessions/blob/main/docs/ARCHITECTURE.md) | 改代码的人 | 三层职责、数据形状、service 契约、降级矩阵、性能预算表 |
+| [REVERSE-ENGINEERING.md](https://github.com/yhm138/workbuddy-cloud-sessions/blob/main/docs/REVERSE-ENGINEERING.md) | 好奇的人 | 一个写死的 `false` 引出的整条链路，包括那次把客户端搞闪退的尝试 |
+| [TROUBLESHOOTING.md](https://github.com/yhm138/workbuddy-cloud-sessions/blob/main/docs/TROUBLESHOOTING.md) | 使用者 | 症状 → 原因 → 处理，附诊断区逐行解释 |
+| [docs/README.md](https://github.com/yhm138/workbuddy-cloud-sessions/blob/main/docs/README.md) | 所有人 | 文档地图：想干什么 → 读哪篇 |
 
 PROTOCOL.md 保留为协议事实清单，加了「你要找什么 → 去哪节」的索引；发布说明归档到 `docs/releases/`；新增 `CHANGELOG.md`、`CONTRIBUTING.md` 和 issue 模板。
 

@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """把桌面端的 DesktopCloudTaskEntry 特性开关从「硬编码 false」改成 true。
 
+⚠️ 不推荐使用，仅作逆向记录保留。
+实测三处全开会让客户端启动即闪退：开关背后是一条打包时未联调的代码路径
+（云端会话列表接口 / CloudTaskSearcher 都没实现），renderer 直接抛错。
+改完必须能还原，否则客户端打不开 —— 先用 `--check` 确认有备份再动手。
+
 原理
 ----
 WorkBuddy 客户端在打包时把这个开关写死成 false：

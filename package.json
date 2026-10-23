@@ -17,7 +17,8 @@
     "serve": "node bin/wbcs.js serve",
     "export": "node bin/wbcs.js export",
     "all": "node bin/wbcs.js all",
-    "test": "node test/run-handshake.js"
+    "test": "node test/run-handshake.js",
+    "shots": "node tools/demo-shots.js"
   },
   "engines": {
     "node": ">=18"

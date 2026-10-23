@@ -121,6 +121,16 @@ node bin/wbcs.js serve           # 打开 http://127.0.0.1:8787/
    运行期替换扩展目录后，宿主仍按旧快照去取文件 → 取不到就报这句话。
    **完全退出 WorkBuddy（托盘图标右键退出，只关窗口不够）再打开**即可。所以 `wbcs deploy` 检测到客户端在跑会直接拒绝，别绕过它。
 
+**「接着聊」/「在网页打开」点了没反应**
+v1.0.3 已修，两处都是通道选错：
+
+- **在网页打开**：`wb:shell:openExternal` 对扩展 iframe 是硬编码拒绝的（宿主只放行 `subject.type === "window"`）。
+  改成在 iframe 里 `window.open` —— 主窗口的 `setWindowOpenHandler` 正好是「deny + shell.openExternal」，
+  所以等效于用系统浏览器打开。
+- **接着聊**：`wb:message:fill` 属于「自定义菜单」那条 embed 通道，扩展侧到不了。
+  现在先试一次，失败就自动把上下文复制到剪贴板，按钮文案改成「复制上下文」。
+  想让它真的自动填入，得等宿主放开这个通道。
+
 **版本号为什么必须三处一致**
 `extension.json` / `distribution.json` / `ui/index.html` 里的 `PAGE_VERSION`。
 宿主按清单版本给页面打 `?v=`，页面拿它做自检：不一致时面板顶部会显示一条黄色提示，直接告诉你「重启即可」，不用再猜。

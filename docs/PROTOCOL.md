@@ -253,15 +253,57 @@ Guest Ready timed out after 10000ms: cloud-sessions
 
 宿主侧 `assertAuthorized` 会校验 subject（来自扩展清单的 `grantedPermissions`）。
 
-验证可用、且本项目实际用到的通道：
+扩展 iframe 能用的通道比想象中窄。实测（v1.0.3）：
 
-| 通道 | 用途 | 备注 |
+| 通道 | 扩展 iframe | 原因 |
 | --- | --- | --- |
-| `wb:config:get` | 读主题（`theme`） | 让页面跟随客户端深浅色 |
-| `wb:shell:openExternal` | 用系统浏览器打开链接 | 沙箱里 `window.open` 常被拦，这是可靠出口 |
-| `wb:message:fill` | 把内容填进客户端输入框（不发送） | 「接着聊」用它，参数 `[{ content: ContentBlock[] }]` |
+| `wb:config:get` | ✅ 能用 | 授权表里标 `public`，读 `theme` / `language` |
+| `wb:http:get` 等 | ✅ 能用 | `http` 命名空间在转发白名单里 |
+| `wb:shell:openExternal` | ❌ 必被拒 | 见下，subject 类型不对 |
+| `wb:message:fill` | ❌ 调不到 | 属于 custom-menu 的 embed 通道，注释见下 |
 
-`wb:http:get` / `wb:http:post` 在权限表里是 `http.get` / `http.post`，`grantedPermissions: ["*"]` 时有希望放行，但**没有 SSE 流式能力**，所以拿不到正文回放，只能用于普通 REST。
+**`wb:shell:openExternal` 为什么必然失败**
+
+`main/rpc-connection.js` 里的授权判定是硬编码的：
+
+```js
+function checkAuthorizationSimplified(channel, subject) {
+  if (subject.type === "window" && subject.moduleId === "main"
+   || channel === "wb:shell:openExternal" && subject.type === "window" && subject.kind === "builtin"
+   || ...) return;                      // 放行
+  const e = Error(`[wb.shell] ${channel} denied for subject ${subject.moduleId} (type=${subject.type}); …`);
+  e.code = "PERMISSION_DENIED";
+  return e;
+}
+```
+
+而扩展 iframe 的 subject 是 `extension-mount` 里写死的：
+
+```js
+{ moduleId: <extensionId>, type: "extension", kind: "builtin", scopes: [], instanceId: "iframe:…" }
+```
+
+`type` 永远是 `extension`，不是 `window` —— 所以 `PERMISSION_DENIED`，没有绕过的余地。
+
+**替代方案（本项目采用）**：直接在 iframe 里 `window.open(url, "_blank")`。
+主窗口的 `setWindowOpenHandler` 对普通 URL 的处理正好是：
+
+```js
+[WindowManager] Denying window.open, opening externally: <url>
+→ action: "deny" + shell.openExternal(url)
+```
+
+iframe 的 sandbox 带 `allow-popups`，点击有用户手势，所以这条等于「用系统浏览器打开」，
+观察本地日志能看到 `[WindowManager] Denying window.open, opening externally`。
+
+**`wb:message:fill` 为什么调不到**
+
+它不在 main 的通道表里（`main/rpc-connection.js` 的 wb: 清单没有 `wb:message:*`），
+只在 renderer 的 custom-menu embed invoker 里（`createEmbedMessageInvoke`），
+是给「自定义菜单」那种 embed 容器用的，扩展 iframe 的请求到不了那一层。
+
+所以「接着聊」只有在宿主真放行时才能直接填输入框；本项目做成：先试一次，
+失败就把上下文复制到剪贴板、按钮文案改成「复制上下文」，不让用户反复踩同一个坑。
 
 `wb:account:token` 在自定义菜单表面被标为 `host-only`，扩展侧拿不到账号 token。
 
@@ -300,14 +342,21 @@ accept: application/json
 
 ### 6.2 `wb:message:fill` 的参数
 
+> 先看清楚：这个通道**扩展 iframe 调不到**（见上一节）。下面只是记下它的真实契约，
+> 万一以后宿主放开，参数按这个传就行。
+
 ```js
 Bridge.invoke('wb:message:fill', [{
-  content: [{ type: 'text', text: '...' }]   // 或直接传字符串
-  // mode / scene 可选
+  content: [{ type: 'text', text: '...' }],  // 也接受裸字符串
+  // mode / scene 可选，必须是非空字符串
 }])
 ```
 
-语义是**填入输入框，不自动发送**（对应 `wb:message:send` 才会发）。这在桌面端才有意义：浏览器里没有宿主，调用必然失败，本项目会退回到"复制到剪贴板"。
+解析代码（`renderer` 的 `createEmbedMessageInvoke`）要求 `args[0]` 是对象、非数组，
+`content` 是「非空字符串」或「非空 ContentBlock[]」，每个 block 必须有 `type`；
+`text` block 还必须带非空 `text`。不满足会抛 `INVALID_ARGUMENT`。
+
+语义是**填入输入框，不自动发送**（`wb:message:send` 才会发）。
 
 ---
 

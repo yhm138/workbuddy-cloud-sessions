@@ -446,7 +446,7 @@
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.0.2";
+  var PAGE_VERSION = "1.0.3";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -463,6 +463,7 @@
   var SEARCH = null;      // [[id, [[idx, role, snippet], ...]], ...]
   var SEARCH_BY_ID = null;
   var FAV = loadFav();
+  var fillBroken = false;   // 宿主拒绝过一次 wb:message:fill 后，按钮退化成复制
 
   var state = {
     q: "",
@@ -534,10 +535,22 @@
       copy(text, "浏览器不允许下载，已复制到剪贴板");
     }
   }
-  function log(step, detail) {
+  /**
+   * 诊断区 = 头部状态（宿主通道等，会被多次刷新）+ 追加式日志。
+   * 两者分开存，刷新头部时不能把日志冲掉（排查问题时日志才是关键）。
+   */
+  var LOGLINES = [];
+  var diagHeader = [];
+  function renderDiag() {
     var pre = document.getElementById("diag");
-    var line = "[" + new Date().toTimeString().slice(0, 8) + "] " + step + (detail ? " :: " + detail : "");
-    pre.textContent = (pre.textContent === "…" || pre.textContent === "probe…" ? "" : pre.textContent) + line + "\n";
+    if (!pre) return;
+    pre.textContent = diagHeader.concat(LOGLINES).join("\n");
+  }
+  function setDiagHeader(lines) { diagHeader = lines || []; renderDiag(); }
+  function log(step, detail) {
+    LOGLINES.push("[" + new Date().toTimeString().slice(0, 8) + "] " + step + (detail ? " :: " + detail : ""));
+    if (LOGLINES.length > 200) LOGLINES.shift();
+    renderDiag();
   }
   function webUrl(id) { return id ? WEB + "/app/conversation/" + encodeURIComponent(id) : WEB + "/app"; }
 
@@ -636,25 +649,29 @@
     };
   })();
 
-  /** 打开外部链接：优先宿主通道（沙箱里 window.open 常被拦），退回 window.open */
+  /**
+   * 打开外部链接。
+   *
+   * 不走 wb:shell:openExternal —— 主进程里这个通道的授权是：
+   *   subject.type === 'window' && subject.kind === 'builtin'
+   * 而扩展 iframe 的 subject.type 固定是 'extension'，必然 PERMISSION_DENIED。
+   *
+   * 但主窗口的 setWindowOpenHandler 对普通 URL 的处理正好是
+   *   「deny + shell.openExternal(url)」
+   * 所以从 iframe 里 window.open 就等价于"用系统浏览器打开"。
+   * iframe 的 sandbox 带 allow-popups，这条能走通。
+   */
   function openExternal(url) {
-    if (window.parent !== window && !Bridge.isDisabled()) {
-      return Bridge.invoke("wb:shell:openExternal", [url], 8000).then(function () {
-        log("openExternal", "ok " + url);
-      }).catch(function (e) {
-        log("openExternal", "failed: " + e.message + "，退回 window.open");
-        return openViaWindow(url);
-      });
+    var hosted = !!(window.__WBCS_GUEST__ && window.__WBCS_GUEST__.port);
+    var w = null;
+    try { w = window.open(url, "_blank", "noopener"); } catch (e) { w = null; }
+    if (hosted) {
+      // 被宿主 deny 时这里返回 null，但已经转交系统浏览器了，不能当失败
+      log("openExternal", "window.open → 系统浏览器 " + url);
+      toast("已在系统浏览器打开");
+      return;
     }
-    return openViaWindow(url);
-  }
-  function openViaWindow(url) {
-    try {
-      var w = window.open(url, "_blank", "noopener");
-      if (!w) throw new Error("被拦截");
-    } catch (e) {
-      copy(url, "无法打开窗口，地址已复制");
-    }
+    if (!w) copy(url, "浏览器拦了新窗口，地址已复制");
   }
 
   /**
@@ -710,17 +727,30 @@
       var ctx = buildContext(shard);
       if (!ctx) return toast("这条会话没有可用的对话内容");
 
+      if (fillBroken) return copyContext(ctx);
+
       fillMessage(ctx).then(function () {
         toast("已填入输入框，直接在客户端接着问就行");
         log("message/fill", "ok " + ctx.length + " 字符");
       }).catch(function (e) {
-        log("message/fill", "failed: " + e.message);
-        copy(ctx, "宿主不允许直接填充，已复制上下文，粘贴到输入框即可");
+        // 宿主拒了一次就别再让用户重复踩：按钮直接退化成"复制上下文"
+        fillBroken = true;
+        log("message/fill", "failed: " + e.message + (e.code ? " [" + e.code + "]" : ""));
+        var btn = document.getElementById("dChat");
+        if (btn) {
+          btn.textContent = "复制上下文";
+          btn.title = "宿主不允许扩展直接填充，改为复制到剪贴板（粘贴即可）";
+        }
+        copyContext(ctx);
       });
     });
   }
 
-  /** Markdown 里的外链：沙箱里 target=_blank 常被拦，统一走宿主打开 */
+  function copyContext(ctx) {
+    copy(ctx, "已复制 " + ctx.length + " 字上下文，点到聊天框 Ctrl+V 就能接着聊");
+  }
+
+  /** Markdown 里的外链：统一交给 openExternal（window.open → 系统浏览器） */
   function routeLinks(container) {
     container.addEventListener("click", function (ev) {
       var a = ev.target && ev.target.closest ? ev.target.closest("a[href]") : null;
@@ -1640,8 +1670,7 @@
         ? ("MessagePort" + (g.ready ? "（ready 已确认）" : "（ready 未确认）"))
         : "未建立（只剩浏览器兜底）"));
       if (g && g.lines && g.lines.length) out.push("guest     : " + g.lines.join(" | "));
-      var box = document.getElementById("diag");
-      if (box) box.textContent = out.join("\n");
+      setDiagHeader(out);
     }
     refreshDiag();
     [300, 1500, 4000, 8000].forEach(function (ms) { setTimeout(refreshDiag, ms); });

@@ -230,7 +230,15 @@
     background: var(--bg-soft); color: var(--fg);
   }
   .modal .acts button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .modal .acts button[hidden] { display: none; }
+  .modal .hd { display: flex; align-items: flex-start; gap: 10px; }
+  .modal .hd h3 { flex: 1 1 auto; min-width: 0; }
+  .modal .x {
+    flex: 0 0 auto; width: 26px; height: 26px; padding: 0; margin: -4px -6px 0 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: none; background: transparent; color: var(--fg-dim);
+    border-radius: 7px; cursor: pointer;
+  }
+  .modal .x:hover { background: var(--bg-hover); color: var(--fg); }
 
   /* ---------- 全屏面板 ---------- */
   #detailView, #statsView { display: none; }
@@ -692,8 +700,11 @@
 <div class="toast" id="toast"></div>
 
 <div class="modal" id="snapModal" hidden>
-  <div class="card">
-    <h3 id="snapTitle">本机快照，可能不是最新</h3>
+  <div class="card" role="dialog" aria-modal="true" aria-labelledby="snapTitle">
+    <div class="hd">
+      <h3 id="snapTitle">本机快照，可能不是最新</h3>
+      <button class="x" id="snapX" title="关闭（Esc）" aria-label="关闭"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+    </div>
     <p class="sub" id="snapSub">—</p>
     <p class="tip" id="snapTip">—</p>
     <div class="acts">
@@ -727,7 +738,7 @@
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.5.0";
+  var PAGE_VERSION = "1.6.0";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -1827,8 +1838,8 @@
     card.appendChild(kv);
 
     var acts = el("div", "acts wide");
-    var back = el("button", "primary", needWeb(it) ? "在网页版打开" : "回到会话");
-    back.onclick = function () { goSession(it); };
+    var back = el("button", "primary", "回到会话");
+    back.onclick = function () { openSessionInClient(id); };
     acts.appendChild(back);
     card.appendChild(acts);
 
@@ -1850,11 +1861,9 @@
     };
     subs.appendChild(pull);
 
-    if (!needWeb(it)) {
-      var web = el("button", null, "网页版");
-      web.onclick = function () { openExternal(WEB + "/app/conversation/" + id); };
-      subs.appendChild(web);
-    }
+    var web = el("button", null, "网页版");
+    web.onclick = function () { openExternal(WEB + "/app/conversation/" + id); };
+    subs.appendChild(web);
 
     card.appendChild(subs);
 
@@ -1863,8 +1872,8 @@
   }
 
   /**
-   * 进详情就弹一次：这条正文只是本机快照。
-   * 用 sessionStorage 按会话去重，同一个面板会话里不重复打扰。
+   * 进详情先弹一次：这条正文只是本机快照。
+   * 只认显式关闭：右上角 ✕、先看快照、Esc。点卡片外的遮罩不关。
    */
   function maybeWarnSnapshot(it, id, n) {
     var key = "wbcs.snap." + id;
@@ -1875,55 +1884,31 @@
     var t = relTime(it.ts);
 
     document.getElementById("snapSub").textContent =
-      "面板里是 " + n + " 条本机快照" + (t ? "（" + t.abs + "）" : "") +
-      "，不一定是最新。";
+      "面板里是 " + n + " 条本机快照" + (t ? "（" + t.abs + "）" : "") + "，不一定是最新。";
 
     document.getElementById("snapTip").textContent = mp
-      ? "这类会话来自小程序 / 手机端，客户端打开时可能显示「暂无对话记录」，那就用网页版看。"
+      ? "这类会话来自小程序 / 手机端，客户端打开可能显示「暂无对话记录」，那种情况用网页版看。"
       : "客户端打开的是同一条会话，历史完整，还能接着发消息。";
 
     var m = document.getElementById("snapModal");
-    m.hidden = false;
 
-    var goBtn = document.getElementById("snapGo");
-    var webBtn = document.getElementById("snapWeb");
-    if (mp) {
-      /* 客户端这条路是空的，只留网页版 */
-      goBtn.textContent = "在网页版打开";
-      goBtn.onclick = function () {
-        m.hidden = true;
-        openExternal(WEB + "/app/conversation/" + id);
-      };
-      webBtn.hidden = true;
-    } else {
-      goBtn.textContent = "回到会话";
-      goBtn.onclick = function () {
-        m.hidden = true;
-        openSessionInClient(id);
-      };
-      webBtn.hidden = false;
-      webBtn.onclick = function () {
-        m.hidden = true;
-        openExternal(WEB + "/app/conversation/" + id);
-      };
-    }
+    document.getElementById("snapGo").onclick = function () {
+      m.hidden = true;
+      openSessionInClient(id);
+    };
+    document.getElementById("snapWeb").onclick = function () {
+      m.hidden = true;
+      openExternal(WEB + "/app/conversation/" + id);
+    };
     document.getElementById("snapClose").onclick = function () { m.hidden = true; };
-    m.onclick = function (ev) { if (ev.target === m) m.hidden = true; };
-  }
+    document.getElementById("snapX").onclick = function () { m.hidden = true; };
 
-  /**
-   * 小程序 / 手机端的会话，客户端打开只有壳（实测「暂无对话记录」），
-   * 因为 sourceModel 把 workbuddy-mp 映射成 miniprogram，客户端没有对应的回放通道。
-   * 这类只给网页版，别让人点了空会话还以为丢了记录。
-   */
-  function needWeb(it) {
-    return !!it && (it.origin === "workbuddy-mp" || it.origin === "workbuddy-app");
-  }
+    /* 点卡片以外的区域不关闭：提醒必须被看见，只能走 ✕ / 先看快照 / Esc */
+    m.onpointerdown = null;
+    m.onclick = null;
 
-  function goSession(it) {
-    if (!it) return;
-    if (needWeb(it)) { openExternal(WEB + "/app/conversation/" + it.id); return; }
-    openSessionInClient(it.id);
+    m.hidden = false;
+    document.getElementById("snapClose").focus({ preventScroll: true });
   }
 
   /** 正文顶部的快照说明：一句话交代这不是最新，并给一个直达入口 */
@@ -1931,11 +1916,11 @@
     var d = el("div", "snap");
     d.appendChild(el("b", null, "本机快照"));
     d.appendChild(document.createTextNode(" · 可能不是最新。"));
-    var a = el("a", "lnk", needWeb(it) ? "网页版 →" : "看最新的 →");
+    var a = el("a", "lnk", "看最新的 →");
     a.href = "#/s/" + id;
     a.onclick = function (ev) {
       ev.preventDefault();
-      goSession(it);
+      openSessionInClient(id);
     };
     d.appendChild(a);
     return d;
@@ -2073,12 +2058,12 @@
     row.appendChild(body);
 
     var go = el("button", "row-go", "");
-    go.title = needWeb(it) ? "在网页版打开（客户端里没有这类会话的历史）" : "回到会话（在客户端打开这条会话）";
-    go.setAttribute("aria-label", go.title);
+    go.title = "回到会话（在客户端打开这条会话）";
+    go.setAttribute("aria-label", "回到会话");
     go.innerHTML = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 3.5H13V7"/><path d="M13 3.5 7.4 9.1"/><path d="M11.6 9.6v3.2H3.2V4.4h3.2"/></svg>';
     go.onclick = function (ev) {
       ev.stopPropagation();
-      goSession(it);
+      openSessionInClient(it.id);
     };
     row.appendChild(go);
     return row;
@@ -2251,13 +2236,6 @@
       (it.n ? it.n + " 条" : "正文未缓存");
     setFavLabel(isFav(id));
     setComposer(id, false);
-    var goBtn = document.getElementById("dChat");
-    if (goBtn) {
-      goBtn.textContent = needWeb(it) ? "网页版" : "回到会话";
-      goBtn.title = needWeb(it)
-        ? "这条来自小程序 / 手机端，客户端里没有历史，改用网页版"
-        : "在客户端里打开这条会话本身（同一个 Session），接着在它里面聊";
-    }
     location.hash = "#/s/" + id + (jumpIdx != null ? "/" + jumpIdx : "");
 
     var body = document.getElementById("dBody");
@@ -2541,7 +2519,7 @@
   };
 
   document.getElementById("dChat").onclick = function () {
-    if (state.current) goSession(state.current);
+    if (state.current) openSessionInClient(state.current.id);
   };
   document.getElementById("dFill").onclick = continueChat;
 

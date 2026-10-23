@@ -374,37 +374,6 @@ Xv.next({ sidebarUrl: '', contentBlocks, source });  // 推给主窗口 composer
 
 语义是**填入输入框，不自动发送**（`wb:message:send` 才会发）。
 
-### 6.2.0 深链不是万能的：小程序来源的会话打开是空壳
-
-`workbuddy://chat/<id>` 对 `conversation_origin='agents'` 的会话有效（标题、正文、续聊都正常），
-但对 `workbuddy-mp` **无效** —— 实测 `2064638374820519936`：
-
-- 深链后客户端**正确跳到了这条会话**（标题对得上）；
-- 正文区显示「**暂无对话记录**」，输入框是空的；
-- 同一个 id 在 Web 端有完整历史，扩展快照里也有 23 条。
-
-原因在客户端的来源映射（`renderer/assets/*.js`）：
-
-```js
-origin: t === 'workbuddy-mp'  ? 'miniprogram'
-      : t === 'workbuddy-app' ? 'mobile'
-      :                         'desktop'
-```
-
-它把小程序会话标成 `miniprogram`、手机端标成 `mobile`，而客户端只对 `desktop`（agents）
-有完整的云端回放通道 —— 这也和 `DesktopCloudTaskEntry` 被关掉是同一件事：云会话支持没做完。
-
-**所以扩展 v1.5.0 起按来源分流**：
-
-| origin | 主入口 |
-| --- | --- |
-| `agents` | `workbuddy://chat/<id>` 回到会话 |
-| `workbuddy-mp` / `workbuddy-app` | Web 端 `/app/conversation/<id>` |
-
-列表行尾按钮、详情页顶栏、落地卡、快照弹窗四处都按这个走，避免点了空会话还以为记录丢了。
-
----
-
 ### 6.2.1 想「回到原会话继续」就得用深链，别搬上下文
 
 `workbuddy://chat/<conversationId>` 就是「打开这条会话」。两处证据：
@@ -641,6 +610,25 @@ python tools/patch-cloud-task-entry.py --restore   # 用 app.asar.wbbak 还原
 扩展的定位随之变成补充：全量快照、离线浏览、Markdown 导出、跨来源统计分析。
 
 ---
+
+## 6.6 快照提醒弹窗的关闭约定
+
+进详情若有快照，弹一次模态提醒（`sessionStorage` 键 `wbcs.snap.<id>` 去重，重开面板才会再弹）。
+
+**只有显式动作用户才能关：**
+
+| 关闭方式 | 说明 |
+| --- | --- |
+| 右上角 ✕ | 主路径，26px 热区，SVG 图标 |
+| 「先看快照」 | 明确表示已知情，进入只读快照 |
+| Esc | 键盘快捷键，第二次 Esc 才返回列表 |
+
+**点卡片以外的遮罩不关闭** —— 这是刻意设计：这条正文可能是残缺的，提醒必须被看见一次，
+不能靠点空白处误关。实现上不再给 `.modal` 绑 click，`onclick`/`onpointerdown` 显式置空，
+避免以后有人加回「点外面关闭」。
+
+v1.5.0 曾用 `ev.target === m` 判遮罩，在窄面板下卡片几乎占满、可点区域只剩 18px，
+既容易误点也容易点不到；现在干脆去掉这条路。
 
 ## 7. 已知限制
 

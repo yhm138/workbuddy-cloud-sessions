@@ -17,3 +17,7 @@ Thumbs.db
 .vscode/
 *.log
 .check/
+
+# 打包产物与构建缓存
+dist/
+.cache/

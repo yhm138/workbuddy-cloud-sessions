@@ -630,6 +630,39 @@ python tools/patch-cloud-task-entry.py --restore   # 用 app.asar.wbbak 还原
 v1.5.0 曾用 `ev.target === m` 判遮罩，在窄面板下卡片几乎占满、可点区域只剩 18px，
 既容易误点也容易点不到；现在干脆去掉这条路。
 
+## 6.7 安装包：让「双击就能用」成立的三件事
+
+发布版是 `*-win-x64.zip`，解压双击 `install.bat`。三个决定都是被现实逼出来的：
+
+**① 自带 `node.exe`**
+「装 Node、配 PATH、npm install」这三步对目标用户等于劝退。打包时把官方
+`node-v22-*-win-x64.zip` 里的 `node.exe` 抠出来放进 `runtime/`（83 MB，压完 ~30 MB），
+`install.bat` 直接用它跑 `app/bin/wbcs.js install`。同时它也满足 `node:sqlite` 的版本要求。
+
+**② 不带 Chromium，复用系统浏览器**
+Playwright 的浏览器要额外 150 MB，而且版本号必须和 `playwright-core/browsers.json` 对齐
+（客户端自己装的 `chromium-1223` 就和 npm 版期望的 `1248` 对不上）。写成兜底链之后
+（`src/browser.js`）：
+
+```
+上次成功的浏览器 → channel: chrome → channel: msedge → 扫描 ms-playwright 里的 chrome.exe → 自带
+```
+
+Windows 一定自带 Edge，所以「一次都没下载过浏览器」的机器也能登录。
+
+**③ 把浏览器选择钉死**
+Edge 与 Chrome 往同一个 profile 目录写 cookie 的加密密钥不同（Chrome 127+ 还有
+app-bound 加密，密钥跟可执行文件绑定）。这次用 Chrome 扫码、下次用 Edge 读，cookie 读出来
+就是空的，表现为「明明登录过又跳扫码页」。所以第一次成功启动后把
+`{key,label,exe}` 写进 `<WBCS_HOME>/browser.json`，之后永远优先它。
+
+另外两条工程约定：
+
+- 安装包**绝不能**包含 `ui/data.js`、`ui/full/`（那是真实会话）。`tools/build-release.js`
+  发现它们存在会直接报错退出，而不是默默排除。
+- `zip` 打包用 `-UN=UTF8`，否则中文文件名（`安装.bat`、`使用说明.txt`）到 Windows 资源管理器
+  里会变成乱码；同时额外放一个 ASCII 名的 `install.bat`，任何解压工具都能走通。
+
 ## 7. 已知限制
 
 - **cloud 会话的正文，面板永远只能看到快照**（详见 6.4 ④）。所谓「拉最新」在面板内不存在，

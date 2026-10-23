@@ -12,36 +12,23 @@
 const fs = require("fs");
 const path = require("path");
 const { PROFILE_DIR, WEB_ORIGIN } = require("./config");
+const { launch: launchAnyBrowser } = require("./browser");
 
 function requirePlaywright() {
   try {
     return require("playwright");
   } catch {
     throw new Error(
-      "缺少依赖 playwright。请先执行：\n  npm install\n  npx playwright install chromium"
+      "缺少依赖 playwright。请先执行：\n  npm install\n" +
+        "（用安装包/Release 版不会遇到这个问题）"
     );
   }
 }
 
-/** 优先用系统 Chrome（渲染更接近真实），失败回退 Playwright 自带 Chromium */
+/** 依次试 系统 Chrome / 系统 Edge / 本机 Chromium / 自带 Chromium，见 src/browser.js */
 async function launch(pw, opts = {}) {
-  const args = ["--disable-blink-features=AutomationControlled"];
-  const base = {
-    headless: opts.headless !== false,
-    args,
-    viewport: { width: 1280, height: 820 },
-    locale: "zh-CN",
-  };
-  const candidates = [{ ...base, channel: "chrome" }, base];
-  let lastErr;
-  for (const c of candidates) {
-    try {
-      return await pw.chromium.launchPersistentContext(PROFILE_DIR, c);
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  throw lastErr;
+  const { ctx } = await launchAnyBrowser(pw, PROFILE_DIR, opts);
+  return ctx;
 }
 
 async function openApp(ctx) {

@@ -17,6 +17,14 @@
 const path = require("path");
 const { ensureHome, ROOT } = require("../src/config");
 
+// node:sqlite 每次都喊「这是实验特性」，对使用者全是噪音，只屏蔽这一条
+const emitWarning = process.emitWarning;
+process.emitWarning = function (warning, ...rest) {
+  const msg = typeof warning === "string" ? warning : warning && warning.message;
+  if (msg && /SQLite is an experimental feature/i.test(msg)) return;
+  return emitWarning.call(process, warning, ...rest);
+};
+
 const VERSION = require("../package.json").version;
 
 function parseArgs(argv) {
@@ -55,6 +63,14 @@ function usage() {
       --force                客户端在跑也照装（装完必须重启，否则面板报加载失败）
   wbcs export [--out DIR]    导出 Markdown
   wbcs serve [--port 8787]   本地预览（127.0.0.1）
+  wbcs install               小白向导：查环境 → 登录 → 抓取 → 构建 → 装进客户端
+      --yes                  全默认（最近 30 条，不问）
+      --limit N              只抓前 N 条（0 = 全部）
+      --skip-fetch           只装面板，不抓正文
+      --relogin              强制重新扫码
+      --dest DIR             手动指定 extensions 目录
+  wbcs uninstall [--dest DIR]  从客户端移除扩展（可选删数据）
+      --force                客户端在跑也照删（重启前侧栏会残留入口）
   wbcs all [--force]         fetch + build + deploy
 
 环境变量：
@@ -154,6 +170,34 @@ async function main() {
       build();
       // --force 同时用于「重抓」和「客户端在跑也部署」，两个语义一致：跳过护栏
       deploy({ dest: flags.dest, force: !!flags.force });
+      return;
+    }
+
+    case "install": {
+      const { install } = require("../src/install");
+      await new Promise((r) => setTimeout(r, 30)); // 让 ⌘/cmd 先把上一行刷出去
+      let r;
+      try {
+        r = await install({
+          yes: !!flags.yes,
+          limit: flags.limit !== undefined ? Number(flags.limit) : 0,
+          skipFetch: !!flags["skip-fetch"],
+          relogin: !!flags.relogin,
+          force: !!flags.force,
+          dest: flags.dest || process.env.WBCS_EXT_DIR,
+        });
+      } catch (e) {
+        console.error(`\n✗ 安装中断：${(e && e.message) || e}`);
+        r = { ok: false };
+      }
+      if (!r.ok) process.exitCode = 1;
+      return;
+    }
+
+    case "uninstall": {
+      const { uninstall } = require("../src/install");
+      const r = await uninstall({ dest: flags.dest || process.env.WBCS_EXT_DIR, force: !!flags.force });
+      if (!r.ok) process.exitCode = 1;
       return;
     }
 

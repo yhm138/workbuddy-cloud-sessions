@@ -2,6 +2,8 @@
 
 把 WorkBuddy **桌面端看不见的云端会话**（网页版 / 微信小程序 / 定时任务）搬进侧栏：可读全文、可搜索、可导出，还能一键跳回原会话接着聊。
 
+**[⬇ 下载 Windows 便携版](https://github.com/yhm138/workbuddy-cloud-sessions/releases/latest)** —— 解压后双击 `安装.bat`，不用装 Node。
+
 <p align="center">
   <img src="docs/images/list.png" width="290" alt="会话列表：按来源分组，带消息条数">
   <img src="docs/images/detail.png" width="290" alt="会话详情：Markdown、表格、工具调用折叠">
@@ -73,18 +75,42 @@ createProductFeatureHook({ featureKey: 'DesktopCloudTaskEntry', resolve: () => f
 
 ---
 
-## 快速开始
+## 下载即用（不想碰命令行）
 
-前置：Node 18+（抓正文建议 22+，读 SQLite 用的是内置 `node:sqlite`），WorkBuddy 桌面端已登录过一次。
+到 [Releases](https://github.com/yhm138/workbuddy-cloud-sessions/releases/latest) 下载 `workbuddy-cloud-sessions-<版本>-win-x64.zip`（约 36 MB），解压到任意目录：
+
+1. **先完全退出 WorkBuddy**：右下角托盘图标右键 → 退出（只关窗口不算）
+2. **双击 `install.bat`**（中文名 `安装.bat` 是同一个东西），跟着窗口里的中文提示走：
+   - 第一次会让你扫码登录网页版（微信扫一下，登录态长期复用）
+   - 问抓多少条，默认「最近 30 条」，几分钟内完成
+3. 打开 WorkBuddy → 左侧菜单点「云端会话」
+
+包里自带 Node 运行时，**不用装 Node、不用 npm install**；浏览器复用系统 Chrome / Edge（Windows 自带 Edge）。
+卸载双击 `uninstall.bat`，会问你顺带删不删登录态。
+
+> 安装在客户端目录里（`resources/app.asar.unpacked/resources/extensions/cloud-sessions`）。
+> 数据放在 `%LOCALAPPDATA%\wbcs`，重新解压新版本不会丢。
+
+---
+
+## 从源码安装
+
+前置：Node 18+（抓正文建议 22+，读 SQLite 用的是内置 `node:sqlite`），WorkBuddy 桌面端已登录过一次。macOS / Linux 走这条路。
 
 ```bash
 git clone https://github.com/yhm138/workbuddy-cloud-sessions.git
 cd workbuddy-cloud-sessions
 npm install
-npx playwright install chromium      # 已装 Chrome/Edge 可跳过
+node bin/wbcs.js install             # 向导：查环境 → 登录 → 抓取 → 构建 → 部署
+```
 
+分步来也行（`npx playwright install chromium` 只在系统里既没 Chrome 也没 Edge 时才需要）：
+
+```bash
 node bin/wbcs.js login               # 弹浏览器，扫码一次，登录态长期复用
-node bin/wbcs.js all                 # 抓取 → 构建 → 装进客户端
+node bin/wbcs.js fetch --limit 30    # 抓正文
+node bin/wbcs.js build               # 生成静态数据
+node bin/wbcs.js deploy              # 装进客户端
 ```
 
 然后**完全退出** WorkBuddy（托盘图标右键退出，只关窗口不够）再打开，左侧菜单会多一项「云端会话」。
@@ -103,6 +129,8 @@ node bin/wbcs.js serve               # http://127.0.0.1:8787/
 
 | 命令 | 作用 |
 | --- | --- |
+| `wbcs install` | 一键向导：查环境 → 登录 → 抓取 → 构建 → 部署（`--yes` 全默认，`--skip-fetch` 只装面板） |
+| `wbcs uninstall` | 从客户端移除扩展，可顺带删 `WBCS_HOME` |
 | `wbcs login` | 扫码登录，登录态存到 `.wbcs/profile`（Playwright 持久 profile） |
 | `wbcs list` | 只读本地 DB，列出有哪些云端会话（不联网） |
 | `wbcs fetch` | 抓正文，支持 `--limit N` / `--only id1,id2` / `--force` / `--idle 4000` |
@@ -111,6 +139,7 @@ node bin/wbcs.js serve               # http://127.0.0.1:8787/
 | `wbcs export` | 导出 Markdown 到 `export/`（含 `INDEX.md`） |
 | `wbcs serve` | 本地静态预览，`--port` 改端口 |
 | `wbcs all` | `fetch` + `build` + `deploy` |
+| `npm run release` | 打 Windows 便携包（自带 node.exe），产物在 `dist/` |
 
 环境变量：
 
@@ -184,15 +213,19 @@ flowchart LR
 bin/wbcs.js            CLI 入口
 src/config.js          路径与平台探测（扩展目录自动发现）
 src/db.js              读 workbuddy.db（node:sqlite，只读）
+src/browser.js         浏览器兜底链：Chrome → Edge → 本机 Chromium → 自带
 src/auth.js            Playwright 持久登录
 src/acp.js             ACP over HTTP + SSE 客户端
 src/parse.js           session/update → 扁平面条结构
 src/fetch.js           全量抓取（增量、原子落盘）
 src/build.js           生成 data.js / 正文分片 / 搜索索引
 src/deploy.js          安装为内置扩展
+src/install.js         一键安装 / 卸载向导
 src/serve.js           本地预览服务
 src/export.js          Markdown 导出
 ui/index.html          扩展页面（零依赖，纯原生 JS）
+tools/build-release.js 打 Windows 便携包（自带 node.exe）
+tools/release/         安装包里的 install.bat / uninstall.bat / 使用说明
 tools/demo-shots.js    用示例数据生成 README 截图
 test/handshake.html    假宿主，验证 guest-ready 握手
 test/run-handshake.js  一键跑握手指令自检
@@ -207,6 +240,7 @@ docs/PROTOCOL.md       协议与机制逆向笔记
 
 ```bash
 npm test                    # guest-ready 握手自检（真实 Chrome/Edge）
+npm run release             # 生成 dist/*-win-x64.zip（需要 unzip / zip 命令）
 node tools/demo-shots.js    # 重新生成 docs/images/*.png
 ```
 
@@ -235,6 +269,15 @@ node tools/demo-shots.js    # 重新生成 docs/images/*.png
 
 **装进客户端后菜单里没有**
 `wbcs deploy` 会自动探测安装目录，失败时用 `--dest` 指定到 `…/app.asar.unpacked/resources/extensions`。装完必须完全退出客户端再打开。
+
+**双击 `安装.bat` 窗口一闪就没了**
+`runtime\node.exe` 没解出来。重新下载 zip，用「全部解压」而不是把里面的文件拖出来。
+
+**安装时提示需要管理员权限**
+客户端装在 `C:\Program Files` 下就是这样。右键 `安装.bat` → 「以管理员身份运行」。
+
+**第一次扫码时弹不出浏览器**
+需要系统里有 Chrome 或 Edge（Windows 自带 Edge）。两者都没有时执行 `npx playwright install chromium`。
 
 ---
 

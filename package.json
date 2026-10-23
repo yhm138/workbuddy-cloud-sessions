@@ -1,6 +1,6 @@
 {
   "name": "workbuddy-cloud-sessions",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "把 WorkBuddy 桌面端看不见的云端会话（网页版 / 微信小程序 / 定时任务）搬到侧栏：全量抓取正文、本地渲染、全文搜索、Markdown 导出。",
   "license": "MIT",
   "author": "yhm138",
@@ -18,7 +18,8 @@
     "export": "node bin/wbcs.js export",
     "all": "node bin/wbcs.js all",
     "test": "node test/run-handshake.js",
-    "shots": "node tools/demo-shots.js"
+    "shots": "node tools/demo-shots.js",
+    "release": "node tools/build-release.js"
   },
   "engines": {
     "node": ">=18"

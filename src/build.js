@@ -79,14 +79,14 @@ function assertVersion() {
   return ext;
 }
 
-function build() {
+function build(opts = {}) {
   const version = assertVersion();
   const store = readStore();
-  if (!store.items || !store.items.length) {
+  if ((!store.items || !store.items.length) && !opts.allowEmpty) {
     throw new Error(`没有抓取结果（${SESSIONS_JSON}）。先跑：node bin/wbcs.js fetch`);
   }
-  const byId = new Map(store.items.map((it) => [it.id, it]));
-  const list = resolveList(store.items);
+  const byId = new Map((store.items || []).map((it) => [it.id, it]));
+  const list = resolveList(store.items || []);
 
   fs.mkdirSync(UI_DIR, { recursive: true });
   fs.rmSync(FULL_DIR, { recursive: true, force: true });

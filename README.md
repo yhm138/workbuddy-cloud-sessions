@@ -13,10 +13,9 @@
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![platform](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-lightgrey.svg)](#%E4%BB%8E%E6%BA%90%E7%A0%81%E5%AE%89%E8%A3%85)
 
-<img src="docs/images/list.png" width="300" alt="会话列表：按来源分组，带消息条数与时间">
-<img src="docs/images/detail.png" width="300" alt="会话详情：Markdown、表格、工具调用折叠，末尾给出两条继续对话的出口">
+<img src="docs/images/continue.gif" width="330" alt="动图：从按来源分组的会话列表点进去，读云端回放的最新正文，点「回融合会话继续」跳回同一条会话接着说">
 
-<sub>左：按来源分组的会话列表（网页版 / 小程序 / 定时任务）　·　右：完整正文渲染，表格、工具调用、思考过程都在</sub>
+<sub>列表 → 云端正文 → 一键回融合会话接着说（客户端一侧为示意画面：深链打开的是**同一条 Session**）</sub>
 
 </div>
 
@@ -88,16 +87,24 @@ createProductFeatureHook({ featureKey: 'DesktopCloudTaskEntry', resolve: () => f
 | **深链** | `#/s/<id>` 直达某条会话，可当书签 |
 
 <p align="center">
-  <img src="docs/images/stats.png" width="280" alt="来源分布与活跃度统计">
-  <img src="docs/images/modal.png" width="280" alt="快照降级提示弹窗">
+  <img src="docs/images/list.png" width="240" alt="会话列表：按来源分组，带消息条数与时间">
+  <img src="docs/images/detail.png" width="240" alt="会话详情：Markdown、表格、工具调用折叠，末尾给出两条继续对话的出口">
+  <img src="docs/images/stats.png" width="240" alt="来源分布与活跃度统计">
 </p>
 <p align="center">
-  <sub>左：来源分布与活跃度　·　右：service 没起来时的降级提示（点遮罩不关闭，必须显式确认）</sub>
+  <sub>左：按来源分组（网页版 / 小程序 / 定时任务，各带条数）　·　中：完整正文，表格、工具调用、思考过程都在　·　右：来源分布与 30 天活跃度</sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/modal.png" width="240" alt="快照降级提示弹窗">
+</p>
+<p align="center">
+  <sub>service 没起来时的降级提示：正文退回本机快照，明确标「可能不是最新」，点遮罩不关闭、必须显式确认</sub>
 </p>
 
 快捷键：`/` 搜索 · `↑↓` 选择 · `Enter` 打开 · `Esc` 返回 · `Ctrl+F` 会话内查找 · `?` 统计
 
-> 所有截图由 `node tools/demo-shots.js` 用**内置示例数据**渲染，不含任何真实会话。
+> 截图与动图都由 `node tools/demo-shots.js` / `node tools/demo-gif.js` 用**内置示例数据**渲染，不含任何真实会话。
 
 ---
 
@@ -251,7 +258,8 @@ npm test                    # guest-ready 握手自检（真实 Chrome/Edge）
 npm run test:service        # service 端到端自测（假网关，不联网、不用登录）
 npm run test:panel          # 面板 + service 联调（Playwright，假宿主；NO_SERVICE=1 测降级）
 npm run release             # 生成 dist/*-win-x64.zip（需要 zip / unzip）
-node tools/demo-shots.js    # 重新生成 docs/images/*.png
+npm run shots               # 重新生成 docs/images/*.png
+npm run gif                 # 重新录 docs/images/continue.gif（逐帧截图 + ffmpeg，需装 ffmpeg）
 ```
 
 版本号必须五处一致：`package.json`、`extension.json`、`distribution.json`、`server/index.cjs` 的 `VERSION`、页面里的 `PAGE_VERSION`。`wbcs build` 与 CI 都会校验。

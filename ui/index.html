@@ -418,7 +418,9 @@
   body[data-view="stats"] > header,
   body[data-view="detail"] > footer,
   body[data-view="stats"] > footer { display: none; }
-  #detailView #dBody { padding-bottom: 12px; }
+  /* 底部多留一截：正文末尾那排出口是「接着说」的唯一入口，不能被 toast
+     （fixed bottom:48px）压住，否则刚点完的按钮正好被提示条盖掉。 */
+  #detailView #dBody { padding-bottom: 76px; }
 
   #detailView .bar {
     flex-direction: row; align-items: center; gap: 4px;
@@ -769,7 +771,7 @@
   "use strict";
 
   // 与 extension.json / distribution.json 保持一致；build 时会校验
-  var PAGE_VERSION = "1.11.1";
+  var PAGE_VERSION = "1.11.2";
 
   /* ================= 基础 ================= */
   var DATA = window.CLOUD_SESSIONS || {
@@ -1219,7 +1221,8 @@
       return openExternal(webUrl(id));
     }
     // window.open 对自定义协议通常返回 null，不能拿它判断成败，只能看客户端有没有跳过去
-    toast("正在客户端打开这条会话（同一 Session）… 面板没自动关就按 Esc", 3200);
+    // 提示条只有一行：面板窄，写长了会压住正文末尾那排出口
+    toast("正在切到融合会话…", 3200);
     // 兜底：3.5s 后页面还可见，多半是没跳过去（这类会话可能只在云端）
     setTimeout(function () {
       if (document.visibilityState === "visible") {

@@ -32,5 +32,5 @@ README.md                 30 秒讲清价值，给下载链接
 ## 维护约定
 
 - 文档里的接口、字段、时序，必须能在代码里指出对应行；改了代码就顺手改文档
-- 截图由 `node tools/demo-shots.js` 用内置示例数据生成，**不允许出现真实会话**
+- 截图由 `node tools/demo-shots.js` 用内置示例数据生成，动图由 `node tools/demo-gif.js` 逐帧录制（`npm run shots` / `npm run gif`），**不允许出现真实会话**
 - 版本号五处一致：`package.json` / `extension.json` / `distribution.json` / `server/index.cjs` 的 `VERSION` / `ui/index.html` 的 `PAGE_VERSION`

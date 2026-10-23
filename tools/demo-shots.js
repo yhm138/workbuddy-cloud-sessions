@@ -132,6 +132,77 @@ function writeDemo(dir) {
   return dir;
 }
 
+/**
+ * 假 service：让详情呈现「云端最新」的真实样子，而不是降级后的快照。
+ * 走真实通道 —— 先给页面塞一个 MessagePort（宿主就这么干的），再在另一头应答。
+ * 放在模块级是为了给 demo-gif.js 复用；函数体里只能引用入参 arg（要序列化进页面）。
+ */
+function fakeService(arg) {
+  const rec = arg.rec;
+  const V = arg.version;
+  try {
+    // 让「进面板预取」跳过其它会话，画面里就不会闪进度条
+    const fail = {};
+    for (const id of arg.others) fail[id] = Date.now();
+    localStorage.setItem("wbcs.pullFail", JSON.stringify(fail));
+  } catch (e) {}
+
+  const reply = (port, requestId, result) =>
+    port.postMessage({ type: "wb:invoke:response", requestId, result });
+
+  const answer = (port, d) => {
+    const a = d.args || [];
+    if (d.channel === "wb:boundary:guest-ready") return reply(port, d.requestId, { ok: true });
+    if (d.channel === "wb:extensions:$resolveLocalRpc") {
+      return reply(port, d.requestId, {
+        extensionId: "cloud-sessions",
+        fallbackToken: "demo-token",
+        fallbackExpiresAt: Date.now() + 300000,
+        methods: ["ping", "status", "inspect", "fetchBody", "peek", "warm", "clear"],
+        version: V,
+        serviceInstanceId: "demo",
+      });
+    }
+    if (d.channel === "wb:extensions:$invokeLocalRpcFallback") {
+      const method = a[1];
+      const payload = a[2] || {};
+      if (method === "ping") {
+        return reply(port, d.requestId, { ok: true, version: V, pid: 24380, uptime: 913, ports: [], cache: 1 });
+      }
+      if (method === "status") {
+        return reply(port, d.requestId, { ok: true, version: V, pid: 24380, cache: [rec.id], inflight: [], active: 0, waiting: 0, calls: [] });
+      }
+      if (method === "peek") {
+        return reply(port, d.requestId, { ok: true, live: false, n: rec.messages.length, messages: rec.messages, events: rec.events });
+      }
+      if (method === "fetchBody") {
+        return reply(port, d.requestId, payload.id === rec.id
+          ? { ok: true, cached: false, elapsed: 120, shard: rec }
+          : { ok: true, cached: false, elapsed: 60, shard: { id: payload.id, ok: true, messages: [], stats: {} } });
+      }
+    }
+    return reply(port, d.requestId, { ok: true });
+  };
+
+  const boot = () => {
+    /* 宿主给 iframe 投递 MessagePort 就是这么做的；这里只是把另一头留在本进程里应答 */
+    const ch = new MessageChannel();
+    ch.port1.addEventListener("message", (ev) => {
+      const d = ev.data;
+      if (!d || d.type !== "wb:invoke:request") return;
+      answer(ch.port1, d);
+    });
+    try { ch.port1.start(); } catch (e) {}
+    window.postMessage({ type: "__wb_port_init__", readyToken: "demo" }, "*", [ch.port2]);
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => setTimeout(boot, 0));
+  } else {
+    setTimeout(boot, 0);
+  }
+}
+
 async function shots(dir) {
   const { chromium } = require("playwright");
   const launch = async () => {
@@ -147,83 +218,13 @@ async function shots(dir) {
   const hostUrl = "file:///" + path.join(dir, "host.html").replace(/\\/g, "/");
   fs.mkdirSync(OUT, { recursive: true });
 
-  /**
-   * 假 service：让详情截图呈现「云端最新」的真实样子，而不是降级后的快照。
-   * 走真实通道 —— 先给页面塞一个 MessagePort（宿主就这么干的），再在另一头应答。
-   */
-  const FAKE_SERVICE = (arg) => {
-    const rec = arg.rec;
-    const V = arg.version;
-    try {
-      // 让「进面板预取」跳过其它会话，截图里就不会闪进度条
-      const fail = {};
-      for (const id of arg.others) fail[id] = Date.now();
-      localStorage.setItem("wbcs.pullFail", JSON.stringify(fail));
-    } catch (e) {}
-
-    const reply = (port, requestId, result) =>
-      port.postMessage({ type: "wb:invoke:response", requestId, result });
-
-    const answer = (port, d) => {
-      const a = d.args || [];
-      if (d.channel === "wb:boundary:guest-ready") return reply(port, d.requestId, { ok: true });
-      if (d.channel === "wb:extensions:$resolveLocalRpc") {
-        return reply(port, d.requestId, {
-          extensionId: "cloud-sessions",
-          fallbackToken: "demo-token",
-          fallbackExpiresAt: Date.now() + 300000,
-          methods: ["ping", "status", "inspect", "fetchBody", "peek", "warm", "clear"],
-          version: V,
-          serviceInstanceId: "demo",
-        });
-      }
-      if (d.channel === "wb:extensions:$invokeLocalRpcFallback") {
-        const method = a[1];
-        const payload = a[2] || {};
-        if (method === "ping") {
-          return reply(port, d.requestId, { ok: true, version: V, pid: 24380, uptime: 913, ports: [], cache: 1 });
-        }
-        if (method === "status") {
-          return reply(port, d.requestId, { ok: true, version: V, pid: 24380, cache: [rec.id], inflight: [], active: 0, waiting: 0, calls: [] });
-        }
-        if (method === "peek") {
-          return reply(port, d.requestId, { ok: true, live: false, n: rec.messages.length, messages: rec.messages, events: rec.events });
-        }
-        if (method === "fetchBody") {
-          return reply(port, d.requestId, payload.id === rec.id
-            ? { ok: true, cached: false, elapsed: 120, shard: rec }
-            : { ok: true, cached: false, elapsed: 60, shard: { id: payload.id, ok: true, messages: [], stats: {} } });
-        }
-      }
-      return reply(port, d.requestId, { ok: true });
-    };
-
-    const boot = () => {
-      /* 宿主给 iframe 投递 MessagePort 就是这么做的；这里只是把另一头留在本进程里应答 */
-      const ch = new MessageChannel();
-      ch.port1.addEventListener("message", (ev) => {
-        const d = ev.data;
-        if (!d || d.type !== "wb:invoke:request") return;
-        answer(ch.port1, d);
-      });
-      try { ch.port1.start(); } catch (e) {}
-      window.postMessage({ type: "__wb_port_init__", readyToken: "demo" }, "*", [ch.port2]);
-    };
-
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", () => setTimeout(boot, 0));
-    } else {
-      setTimeout(boot, 0);
-    }
-  };
-
   const open = async (withService) => {
     const page = await browser.newPage({ viewport: { width: 400, height: 840 }, deviceScaleFactor: 2 });
     const errs = [];
     page.on("pageerror", (e) => errs.push(String(e)));
     if (withService) {
       const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
-      await page.addInitScript(FAKE_SERVICE, {
+      await page.addInitScript(fakeService, {
         rec: DETAIL_REC,
         version: pkg.version,
         others: ITEMS.filter((x) => x.id !== DETAIL_REC.id).map((x) => x.id),
@@ -274,12 +275,16 @@ async function shots(dir) {
   }
 }
 
-(async () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wbcs-demo-"));
-  try {
-    writeDemo(tmp);
-    await shots(tmp);
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-})();
+if (require.main === module) {
+  (async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wbcs-demo-"));
+    try {
+      writeDemo(tmp);
+      await shots(tmp);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  })();
+}
+
+module.exports = { writeDemo, fakeService, ITEMS, DETAIL, OUT, detailRec: () => DETAIL_REC };
